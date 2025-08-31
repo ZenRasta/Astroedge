@@ -1,0 +1,92 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DEBUG=true
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE=${SUPABASE_SERVICE_ROLE}
+      - SUPABASE_ANON=${SUPABASE_ANON}
+      - FEE_BPS_DEFAULT=${FEE_BPS_DEFAULT:-60}
+      - SPREAD_DEFAULT=${SPREAD_DEFAULT:-0.01}
+      - SLIPPAGE_DEFAULT=${SLIPPAGE_DEFAULT:-0.005}
+      - LAMBDA_GAIN=${LAMBDA_GAIN:-0.10}
+      - EDGE_THRESHOLD=${EDGE_THRESHOLD:-0.04}
+      - LAMBDA_DAYS=${LAMBDA_DAYS:-5}
+      - ORB_LIMITS_JSON=${ORB_LIMITS_JSON:-'{"square": 8, "opposition": 8, "conjunction": 6}'}
+      - K_CAP=${K_CAP:-5.0}
+      - APP_VERSION=${APP_VERSION:-0.1.0}
+    volumes:
+      - ./backend:/app/backend
+      - ./sql:/app/sql
+    depends_on:
+      - redis
+    networks:
+      - astroedge-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile.bot
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE=${SUPABASE_SERVICE_ROLE}
+      - BACKEND_URL=http://backend:8000
+    volumes:
+      - ./bot:/app/bot
+    depends_on:
+      - backend
+      - redis
+    networks:
+      - astroedge-network
+    restart: unless-stopped
+
+  webapp:
+    build:
+      context: .
+      dockerfile: Dockerfile.webapp
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+    volumes:
+      - ./webapp:/app
+      - /app/node_modules
+    networks:
+      - astroedge-network
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - astroedge-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  astroedge-network:
+    driver: bridge
+
+volumes:
+  redis_data:

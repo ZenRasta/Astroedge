@@ -1,0 +1,629 @@
+1) Problem statement (restated precisely)
+
+Every 3 months, compute a calendar of challenging/discordant astrological aspects among the major planets (Sun, Moon, Mercury, Venus, Mars, Jupiter, Saturn, Uranus, Neptune, Pluto). Use this calendar to discover Polymarket markets that resolve within that quarter and are plausibly sensitive to those aspects. For each candidate market, estimate whether the YES price is under- or overpriced—using a small, transparent astro factor layered on top of the market’s own prior probability (and any non-astro evidence if available). If edge_net > threshold, recommend a YES or NO position with conservative sizing.
+
+Key intent: the astro layer is a weak, hypothesis-driven signal that nudges probabilities; it is not the only basis for a trade.
+
+2) Ontology & data schemas
+2.1 Aspect events (quarterly schedule)
+{
+  "aspect_id": "2025Q3-Mars_square_Saturn-2025-09-04T02:58Z",
+  "start_utc": "2025-09-03T18:00:00Z",
+  "peak_utc": "2025-09-04T02:58:00Z",
+  "end_utc": "2025-09-04T12:00:00Z",
+  "planets": ["MARS","SATURN"],
+  "aspect": "square",
+  "orb_deg": 0.8,
+  "severity": "major",                 // major | minor
+  "notes": "Mars square Saturn 18° Libra–Cancer",
+  "source": "prokerala/skyfield",
+  "confidence": 0.9
+}
+
+2.2 Aspect → category impact map (heuristic, tunable)
+
+We map planetary pairs + aspect type to market categories with signed weights in 
+[
+−
+3
+,
++
+3
+]
+[−3,+3]. (Start conservative; tune later.)
+
+Example defaults (edit as you learn):
+
+| Pair / Aspect | Conflict/War | Accidents/Infra | Legal/Restrictions | Markets/Finance | Communications/Tech | Public Sentiment |
+|---|---:|---:|---:|---:|---:|
+| Mars □/Opp Saturn | +3 | +2 | +2 | 0 | 0 | +1 |
+| Mars □/Opp Uranus | +2 | +3 | +1 | 0 | +2 | +1 |
+| Mars □/Opp Pluto | +3 | +2 | +1 | 0 | 0 | +2 |
+| Mercury □/Rx (to Mars/Uranus) | 0 | +2 | 0 | 0 | +3 | +1 |
+| Saturn □/Opp Sun/Mars | +1 | +1 | +3 | 0 | 0 | 0 |
+| Jupiter hard to Mars | +1 | 0 | 0 | +1 | 0 | +2 |
+| Eclipses (Sun/Moon opp.) | +1 | +1 | 0 | 0 | 0 | +2 |
+
+(“□/Opp” = square/opposition; treat conjunctions case-by-case.)
+
+2.3 Market metadata (normalized from Polymarket)
+{
+  "market_id": "abc123",
+  "title": "Will Country A and Country B go to war in 2025?",
+  "description": "...",
+  "deadline_utc": "2025-09-30T23:59:00Z",
+  "category_tags": ["geopolitics","conflict"],
+  "price_yes": 0.10,
+  "liquidity_score": 0.7,
+  "rules_clarity": "clear"           // clear | medium | ambiguous
+}
+
+3) Scoring & decision math
+3.1 Aspect Strength Score (per market)
+
+For each market resolving in the quarter, compute an astro impact score from overlapping aspect events:
+
+Temporal weight 
+𝑤
+𝑡
+w
+t
+	​
+
+: ramp up near deadline.
+Example: if aspect peak is within 
+±
+𝐷
+±D days of deadline,
+
+𝑤
+𝑡
+=
+exp
+⁡
+ ⁣
+(
+−
+∣
+𝑡
+peak
+−
+𝑡
+deadline
+∣
+/
+𝜆
+)
+w
+t
+	​
+
+=exp(−∣t
+peak
+	​
+
+−t
+deadline
+	​
+
+∣/λ) with 
+𝜆
+∈
+[
+3
+,
+7
+]
+λ∈[3,7] days.
+
+Angular weight 
+𝑤
+𝜃
+w
+θ
+	​
+
+: closeness to exact aspect.
+
+𝑤
+𝜃
+=
+max
+⁡
+{
+0
+,
+1
+−
+∣
+orb_deg
+∣
+/
+orb_limit
+}
+w
+θ
+	​
+
+=max{0,1−∣orb_deg∣/orb_limit}. Use 8° for squares/oppositions, 6° conjunctions.
+
+Category weight 
+𝑤
+𝑐
+w
+c
+	​
+
+: from the impact map matching the market’s tags.
+
+Severity weight 
+𝑤
+𝑠
+w
+s
+	​
+
+: major=1.0, minor=0.5 (edit to taste).
+
+Per-aspect contribution
+
+𝑆
+aspect
+→
+market
+=
+𝑤
+𝑡
+⋅
+𝑤
+𝜃
+⋅
+𝑤
+𝑠
+⋅
+𝑤
+𝑐
+S
+aspect→market
+	​
+
+=w
+t
+	​
+
+⋅w
+θ
+	​
+
+⋅w
+s
+	​
+
+⋅w
+c
+	​
+
+
+Aggregate Astro Score
+
+𝑆
+astro
+=
+∑
+overlapping aspects
+𝑆
+aspect
+→
+market
+S
+astro
+	​
+
+=
+overlapping aspects
+∑
+	​
+
+S
+aspect→market
+	​
+
+
+(Optionally cap to 
+[
+−
+𝐾
+,
++
+𝐾
+]
+[−K,+K], e.g., 
+𝐾
+=
+5
+K=5.)
+
+3.2 Probability adjustment (small, transparent)
+
+Start from prior 
+𝑝
+0
+p
+0
+	​
+
+ (use market mid, or your event engine if you have it). Adjust in log-odds:
+
+𝐿
+=
+logit
+(
+𝑝
+0
+)
++
+𝜆
+⋅
+𝑆
+astro
+,
+𝑝
+astro
+=
+𝜎
+(
+𝐿
+)
+L=logit(p
+0
+	​
+
+)+λ⋅S
+astro
+	​
+
+,p
+astro
+	​
+
+=σ(L)
+
+𝜆
+λ is a tiny gain (e.g., 0.05–0.20). Start at 0.10 and tune on backtests.
+
+Clamp 
+𝑝
+astro
+p
+astro
+	​
+
+ to 
+[
+0.02
+,
+0.98
+]
+[0.02,0.98].
+
+3.3 Mispricing and action
+
+Edge (YES): 
+edge
+=
+𝑝
+astro
+−
+price_yes_net
+edge=p
+astro
+	​
+
+−price_yes_net.
+
+Costs: include fee bps on proceeds + half-spread + slippage estimate.
+
+Threshold: trade only if 
+edge
+>
+𝑇
+(
+𝜏
+,
+liq
+)
+edge>T(τ,liq) where 
+𝑇
+T is ≥ 3–5pp and adaptive to time-to-deadline 
+𝜏
+τ and liquidity.
+
+Sizing: fractional Kelly with caps:
+
+𝑓
+=
+min
+⁡
+(
+cap
+,
+ frac
+⋅
+𝑝
+astro
+−
+𝑏
+1
+−
+𝑏
+)
+f=min(cap, frac⋅
+1−b
+p
+astro
+	​
+
+−b
+	​
+
+)
+
+with frac = 0.25–0.50, cap ≤ 5% of equity.
+
+4) End-to-end pipeline
+
+Quarterly aspect schedule
+
+Source: your table or compute via skyfield/Swiss ephemeris.
+
+Detect major discordant aspects; write normalized aspect events (schema §2.1).
+
+Include eclipses if within the quarter.
+
+Market scan (Polymarket)
+
+Pull all open markets resolving within the next 3 months.
+
+Normalize fields and auto-tag categories via LLM (schema §2.3).
+
+Candidate selection
+
+Keep markets whose tags intersect with non-zero category weights for any scheduled aspects.
+
+Filter out ambiguous rules and illiquid books (configurable thresholds).
+
+Astro scoring
+
+For each candidate, compute 
+𝑆
+astro
+S
+astro
+	​
+
+ (formula §3.1).
+
+Produce an explainable breakdown (which aspects contributed what).
+
+Probability & edge
+
+Set 
+𝑝
+0
+p
+0
+	​
+
+ = market mid (or your event engine posterior if available).
+
+Compute 
+𝑝
+astro
+p
+astro
+	​
+
+, edge_net, and recommended size.
+
+Require minimum confidence (e.g., at least 2 independent aspects affecting the same category, or one major + eclipse).
+
+Output
+
+A ranked list of opportunities with: {market_id, title, deadline, p0, p_astro, edge_net, size, reasons[], aspect_breakdown[], caveats[]}.
+
+(Optional) Trade
+
+If integrated with your executor, turn recommendations into maker orders with clip size from the sizing rule.
+
+5) LLM prompts (ready to paste)
+5.1 Market tagger (per market)
+
+System:
+“You classify Polymarket markets into domain categories and extract structured fields. Return strict JSON.”
+
+User:
+
+TITLE: {title}
+DESCRIPTION: {description}
+RULES: {rules}
+DEADLINE: {deadline_utc}
+
+Task:
+1) Assign category_tags from this set:
+   ["geopolitics","conflict","accidents_infrastructure","legal_regulatory","markets_finance",
+    "communications_tech","public_sentiment","sports","entertainment","science_health","weather"]
+2) Rate rules_clarity: "clear" | "medium" | "ambiguous".
+3) Return JSON:
+{
+  "category_tags": [...],
+  "rules_clarity": "...",
+  "criterion_one_sentence": "...",
+  "red_flags": ["..."]
+}
+
+5.2 Aspect → market impact scorer
+
+System:
+“You score how much an aspect (planets + aspect type + time window) might influence a market category. Use only the provided impact map and timing math; do not invent astrology. Return strict JSON.”
+
+User:
+
+MARKET:
+{market_json}
+
+ASPECTS (for the quarter):
+[{aspect_event_json}, ...]
+
+IMPACT_MAP (weights -3..+3):
+{impact_map_matrix}
+
+WINDOW_PARAMS:
+{"lambda_days": 5, "orb_limit_deg": {"square":8,"opposition":8,"conjunction":6}, "severity_weight":{"major":1.0,"minor":0.5}}
+
+Task:
+For each aspect that overlaps the market's [-7d, +7d] around DEADLINE, compute:
+- temporal_weight, angular_weight, severity_weight, category_weight_sum
+- contribution = product of the weights
+Return JSON:
+{
+  "aspect_contributions": [
+    {"aspect_id":"...","contribution":0.74,"explain":"Mars□Saturn near deadline; conflict tag"},
+    ...
+  ],
+  "S_astro": 1.62
+}
+
+5.3 Decision builder
+
+System:
+“You combine a prior p0, an astro score S_astro, and costs to produce p_astro, edge_net, and size. Be conservative. Return strict JSON.”
+
+User:
+
+INPUT:
+p0: {price_yes_mid}
+S_astro: {S_astro}
+lambda_gain: {lambda}
+fees_bps: {fee_bps}
+spread: {spread}
+slippage: {slip}
+deadline_utc: {deadline}
+
+Task:
+1) p_astro = logistic(logit(p0) + lambda_gain*S_astro), clipped [0.02,0.98]
+2) edge_net = p_astro - (p0 + fees_bps/10000 + spread/2 + slippage)
+3) If edge_net <= threshold(T), recommend "Skip".
+   Else recommend "YES" with fractional Kelly size capped at 5% of equity.
+Return JSON:
+{"p_astro":0.14,"edge_net":0.045,"recommendation":"YES","size_fraction":0.032,"notes":["..."]}
+
+6) Validation, risk, and refinement
+
+Backtest rigor:
+
+Pre-register impact map and 
+𝜆
+λ before evaluation.
+
+Use rolling quarters from historical Polymarket data; compute Brier, log-loss, and net P&L after fees/slippage.
+
+Compare to baselines: (i) market prior only, (ii) your event engine without astro. Keep astro only if it improves calibration and P&L.
+
+Guardrails:
+
+Cap astro effect: 
+∣
+𝜆
+⋅
+𝑆
+astro
+∣
+≤
+0.5
+∣λ⋅S
+astro
+	​
+
+∣≤0.5 in log-odds (≈ shift ≤ ~12 pp near p=0.5).
+
+Require at least one non-astro confirmation signal in high-stakes markets (courts, wars).
+
+Ambiguous rules ⇒ no trade.
+
+Enforce minimum liquidity and time buffers (e.g., ≥ 7 days to deadline unless spread is tight).
+
+Microstructure integration (if you have the DB):
+
+Set the edge threshold 
+𝑇
+T from predicted forecast RMSE and slippage by regime.
+
+Scale size down in high predicted volatility regimes.
+
+7) Minimal PoC pseudocode
+# quarterly_schedule.py
+aspects = compute_discordant_aspects(quarter_start, quarter_end)  # skyfield/table → list[Aspect]
+
+# markets.py
+mkts = fetch_polymarket_markets()                  # normalize & filter by deadline ∈ quarter
+for m in mkts:
+    m.tags, m.rules_clarity = llm_tag_market(m)
+
+# candidate_filter.py
+candidates = [m for m in mkts if m.rules_clarity=="clear" and is_liquid(m)]
+
+# scoring.py
+def S_astro_for_market(m, aspects, impact_map, params):
+    contribs = []
+    for a in overlapping(aspects, m.deadline, window_days=7):
+        w_t = exp(-abs(a.peak - m.deadline)/params.lambda_days_in_days)
+        w_th = max(0, 1 - a.orb_deg/params.orb_limit[a.aspect])
+        w_s = params.severity_weight[a.severity]
+        w_c = sum(impact_map.get((tuple(a.planets), a.aspect), {}).get(tag,0) for tag in m.tags)
+        contrib = w_t * w_th * w_s * w_c
+        if contrib != 0:
+            contribs.append((a.aspect_id, contrib))
+    S = sum(contrib for _,contrib in contribs)
+    return S, contribs
+
+# decision.py
+def decide(m, S, fees_bps=60, spread=0.01, slip=0.005, lam=0.10, thresh=0.04):
+    p0 = m.price_yes
+    L = logit(p0) + lam*S
+    p = clip(sigmoid(L), 0.02, 0.98)
+    costs = fees_bps/10000 + spread/2 + slip
+    edge = p - (p0 + costs)
+    if edge <= thresh:
+        return {"side":"Skip", "p":p, "edge":edge}
+    size = min(0.05, 0.5 * max(0, (p - p0)/(1 - p0)))   # 1/2 Kelly, capped
+    return {"side":"YES", "p":p, "edge":edge, "size":size}
+
+# main.py
+aspects = load_quarter_aspects()
+impact_map = load_impact_map_defaults()
+params = default_window_params()
+
+ops = []
+for m in candidates:
+    S, breakdown = S_astro_for_market(m, aspects, impact_map, params)
+    rec = decide(m, S)
+    ops.append({**rec, "market_id": m.id, "title": m.title, "S_astro": S, "breakdown": breakdown})
+ranked = sorted(ops, key=lambda x: x["edge"], reverse=True)
+print_table(ranked[:50])
+
+8) What to refine next
+
+Tune the impact map: start small (
+±
+1
+±1) and update weights only after out-of-sample results.
+
+Better timing windows: different 
+𝜆
+λ (temporal decay) for slow (Saturn/Pluto) vs fast (Moon/Mercury) aspects.
+
+Eclipses: add a special flag that slightly amplifies oppositions near the eclipse date.
+
+Category taxonomy: keep tags broad (“conflict”, “legal_regulatory”, “communications_tech”) to avoid overfitting.
+
+Human-in-the-loop UI**: show the aspect breakdown and give a one-click “approve/skip” before any trade.
