@@ -1,201 +1,258 @@
 /**
- * AstroEdge Mini-App JavaScript - Enhanced with Analytics Dashboard
+ * AstroEdge Mini-App JavaScript
+ * Enhanced with comprehensive error handling and stable event listeners
  */
 
 // Configuration
 const BACKEND = window.BACKEND_BASE_URL || "http://localhost:8003";
+const API_TIMEOUT = 10000; // 10 second timeout
 
 // Global state
-let currentQuarter = null;
-let aspectsData = [];
-let opportunitiesData = [];
+let currentTab = "dashboard";
 let dashboardData = {};
+let isLoading = false;
 
-// Utility functions
-function currentQuarter(d = new Date()) {
-    const q = Math.floor(d.getUTCMonth() / 3) + 1;
-    return `${d.getUTCFullYear()}-Q${q}`;
-}
-
-function nextQuarter(d = new Date()) {
-    let q = Math.floor(d.getUTCMonth() / 3) + 1;
-    let y = d.getUTCFullYear();
-    q++;
-    if (q > 4) {
-        q = 1;
-        y++;
+// Toast notification system
+function showToast(message, type = "info") {
+    // Remove existing toast
+    const existingToast = document.getElementById("toast");
+    if (existingToast) {
+        existingToast.remove();
     }
-    return `${y}-Q${q}`;
+
+    // Create toast element
+    const toast = document.createElement("div");
+    toast.id = "toast";
+    toast.className = `toast toast-${type}`;
+    toast.textContent = message;
+
+    // Add styles
+    toast.style.cssText = `
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        background: ${type === "error" ? "#d32f2f" : type === "success" ? "#2e7d32" : "#1976d2"};
+        color: white;
+        padding: 12px 20px;
+        border-radius: 8px;
+        z-index: 10000;
+        font-size: 14px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        transform: translateX(100%);
+        transition: transform 0.3s ease;
+        max-width: 300px;
+        word-wrap: break-word;
+    `;
+
+    document.body.appendChild(toast);
+
+    // Animate in
+    setTimeout(() => {
+        toast.style.transform = "translateX(0)";
+    }, 100);
+
+    // Remove after 5 seconds
+    setTimeout(() => {
+        if (toast.parentNode) {
+            toast.style.transform = "translateX(100%)";
+            setTimeout(() => {
+                if (toast.parentNode) {
+                    toast.remove();
+                }
+            }, 300);
+        }
+    }, 5000);
 }
 
-function formatPercent(value) {
-    return `${(value * 100).toFixed(1)}%`;
-}
+// Safe fetch wrapper with comprehensive error handling
+async function safeFetch(url, options = {}) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT);
 
-function formatCurrency(value) {
-    return `$${value.toFixed(2)}`;
-}
-
-function formatDateTime(dateStr) {
     try {
-        const date = new Date(dateStr);
-        return date.toLocaleDateString('en-US', {
-            month: '2-digit',
-            day: '2-digit',
-            hour: '2-digit',
-            minute: '2-digit'
+        const response = await fetch(url, {
+            ...options,
+            signal: controller.signal,
+            headers: {
+                "Content-Type": "application/json",
+                ...options.headers
+            }
         });
-    } catch (e) {
-        return dateStr.substring(0, 10);
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+            const errorText = await response.text().catch(() => "Unknown error");
+            throw new Error(`HTTP ${response.status}: ${errorText}`);
+        }
+
+        return await response.json();
+    } catch (error) {
+        clearTimeout(timeoutId);
+        
+        if (error.name === "AbortError") {
+            throw new Error("Request timed out");
+        } else if (error.name === "TypeError" && error.message.includes("fetch")) {
+            throw new Error("Network error - check connection");
+        }
+        
+        throw error;
     }
 }
 
-function truncateText(text, maxLength = 60) {
-    if (text.length <= maxLength) return text;
-    return text.substring(0, maxLength - 3) + '...';
-}
-
-// UI functions
+// Loading indicator management
 function showLoading() {
-    document.getElementById('loadingIndicator').classList.remove('hidden');
+    isLoading = true;
+    const indicator = document.getElementById("loadingIndicator");
+    if (indicator) {
+        indicator.classList.remove("hidden");
+    }
 }
 
 function hideLoading() {
-    document.getElementById('loadingIndicator').classList.add('hidden');
-}
-
-function showError(message) {
-    const modal = document.getElementById('errorModal');
-    const messageEl = document.getElementById('errorMessage');
-    messageEl.textContent = message;
-    modal.classList.remove('hidden');
-}
-
-function hideError() {
-    document.getElementById('errorModal').classList.add('hidden');
-}
-
-function showSection(sectionId) {
-    document.querySelectorAll('.tab-content').forEach(el => {
-        el.classList.add('hidden');
-    });
-    document.querySelectorAll('.tab-btn').forEach(btn => {
-        btn.classList.remove('active');
-    });
-    
-    document.getElementById(sectionId).classList.remove('hidden');
-    
-    // Highlight active button
-    const buttonMap = {
-        'dashboardSec': 'btnDashboard',
-        'aspectsSec': 'btnAspects',
-        'oppsSec': 'btnOpps',
-        'backtestSec': 'btnBacktest'
-    };
-    
-    if (buttonMap[sectionId]) {
-        document.getElementById(buttonMap[sectionId]).classList.add('active');
-    }
-    
-    // Load section data if needed
-    if (sectionId === 'dashboardSec') {
-        loadDashboardData();
-    } else if (sectionId === 'backtestSec') {
-        loadBacktestData();
+    isLoading = false;
+    const indicator = document.getElementById("loadingIndicator");
+    if (indicator) {
+        indicator.classList.add("hidden");
     }
 }
 
-// Dashboard API functions
-async function loadDashboardData() {
+// Tab management with stable IDs
+function showTab(tabName) {
+    if (isLoading) {
+        showToast("Please wait for current operation to complete", "info");
+        return;
+    }
+
+    // Hide all sections
+    document.querySelectorAll(".tab-content").forEach(section => {
+        section.classList.add("hidden");
+    });
+
+    // Remove active class from all buttons
+    document.querySelectorAll(".tab-btn").forEach(btn => {
+        btn.classList.remove("active");
+    });
+
+    // Show selected section
+    const section = document.getElementById(`${tabName}Sec`);
+    if (section) {
+        section.classList.remove("hidden");
+    }
+
+    // Mark button as active
+    const button = document.getElementById(`btn${tabName.charAt(0).toUpperCase() + tabName.slice(1)}`);
+    if (button) {
+        button.classList.add("active");
+    }
+
+    currentTab = tabName;
+
+    // Load tab-specific data
+    loadTabData(tabName);
+}
+
+// Load tab-specific data
+async function loadTabData(tabName) {
     try {
         showLoading();
-        
-        // Load all dashboard data in parallel
-        const [portfolioKpis, positions, dailyPnl, scatterData] = await Promise.all([
-            fetch(`${BACKEND}/kpis`).then(r => r.ok ? r.json() : {}),
-            fetch(`${BACKEND}/positions`).then(r => r.ok ? r.json() : []),
-            fetch(`${BACKEND}/pnl/daily?days=30`).then(r => r.ok ? r.json() : []),
-            fetch(`${BACKEND}/trades/scatter`).then(r => r.ok ? r.json() : [])
-        ]);
-        
-        dashboardData = {
-            kpis: portfolioKpis,
-            positions: positions,
-            dailyPnl: dailyPnl,
-            scatterData: scatterData
-        };
-        
-        renderDashboard();
-        
+
+        switch (tabName) {
+            case "dashboard":
+                await loadDashboardData();
+                break;
+            case "aspects":
+                await loadAspectsData();
+                break;
+            case "opps":
+                await loadOpportunitiesData();
+                break;
+            case "backtest":
+                await loadBacktestData();
+                break;
+        }
     } catch (error) {
-        console.error('Error loading dashboard data:', error);
-        showError(`Failed to load dashboard: ${error.message}`);
+        console.error(`Error loading ${tabName} data:`, error);
+        showToast(`Failed to load ${tabName} data: ${error.message}`, "error");
     } finally {
         hideLoading();
     }
 }
 
-async function loadBacktestData() {
+// Dashboard data loading
+async function loadDashboardData() {
     try {
-        const response = await fetch(`${BACKEND}/backtest/runs?limit=10`);
-        if (response.ok) {
-            const backtests = await response.json();
-            renderBacktests(backtests);
-        }
+        const [portfolioKpis, positions, dailyPnl, scatterData] = await Promise.all([
+            safeFetch(`${BACKEND}/kpis`).catch(() => ({})),
+            safeFetch(`${BACKEND}/positions`).catch(() => []),
+            safeFetch(`${BACKEND}/pnl/daily?days=30`).catch(() => []),
+            safeFetch(`${BACKEND}/trades/scatter`).catch(() => [])
+        ]);
+
+        dashboardData = { kpis: portfolioKpis, positions, dailyPnl, scatterData };
+        renderDashboard();
     } catch (error) {
-        console.error('Error loading backtest data:', error);
+        throw new Error(`Dashboard loading failed: ${error.message}`);
     }
 }
 
-// Render functions
+// Render dashboard components
 function renderDashboard() {
-    renderPortfolioSummary();
-    renderPerformanceKpis();
-    renderPnlChart();
-    renderScatterChart();
-    renderPositions();
+    try {
+        renderPortfolioSummary();
+        renderPerformanceKpis();
+        renderPnlChart();
+        renderScatterChart();
+        renderPositions();
+    } catch (error) {
+        console.error("Dashboard rendering error:", error);
+        showToast("Dashboard display error", "error");
+    }
 }
 
 function renderPortfolioSummary() {
-    const container = document.getElementById('portfolioSummary');
-    const kpis = dashboardData.kpis || {};
-    
-    const equity = kpis.total_return * 1000; // Assuming $1000 base
-    const positions = dashboardData.positions?.length || 0;
-    const fees = kpis.total_fees || 0;
-    const volume = kpis.total_volume || 0;
+    const container = document.getElementById("portfolioSummary");
+    if (!container) return;
+
+    const { kpis = {} } = dashboardData;
     
     container.innerHTML = `
         <div class="kpi-item">
-            <div class="kpi-value ${equity >= 0 ? 'kpi-positive' : 'kpi-negative'}">${formatCurrency(equity)}</div>
-            <div class="kpi-label">Portfolio Value</div>
+            <div class="kpi-value">${formatCurrency(kpis.equity_usdc || 0)}</div>
+            <div class="kpi-label">Total Equity</div>
         </div>
         <div class="kpi-item">
-            <div class="kpi-value">${positions}</div>
-            <div class="kpi-label">Active Positions</div>
+            <div class="kpi-value ${(kpis.unrealized_pnl || 0) >= 0 ? 'kpi-positive' : 'kpi-negative'}">
+                ${formatCurrency(kpis.unrealized_pnl || 0)}
+            </div>
+            <div class="kpi-label">Unrealized P&L</div>
         </div>
         <div class="kpi-item">
-            <div class="kpi-value">${formatCurrency(fees)}</div>
+            <div class="kpi-value ${(kpis.realized_pnl || 0) >= 0 ? 'kpi-positive' : 'kpi-negative'}">
+                ${formatCurrency(kpis.realized_pnl || 0)}
+            </div>
+            <div class="kpi-label">Realized P&L</div>
+        </div>
+        <div class="kpi-item">
+            <div class="kpi-value">${formatCurrency(kpis.fees_usdc || 0)}</div>
             <div class="kpi-label">Total Fees</div>
-        </div>
-        <div class="kpi-item">
-            <div class="kpi-value">${formatCurrency(volume)}</div>
-            <div class="kpi-label">Total Volume</div>
         </div>
     `;
 }
 
 function renderPerformanceKpis() {
-    const container = document.getElementById('performanceKpis');
-    const kpis = dashboardData.kpis || {};
+    const container = document.getElementById("performanceKpis");
+    if (!container) return;
+
+    const { kpis = {} } = dashboardData;
     
     container.innerHTML = `
         <div class="kpi-item">
-            <div class="kpi-value ${kpis.total_return >= 0 ? 'kpi-positive' : 'kpi-negative'}">${formatPercent(kpis.total_return || 0)}</div>
+            <div class="kpi-value">${formatPercent(kpis.total_return || 0)}</div>
             <div class="kpi-label">Total Return</div>
         </div>
         <div class="kpi-item">
-            <div class="kpi-value">${(kpis.sharpe_ratio || 0).toFixed(2)}</div>
+            <div class="kpi-value">${formatDecimal(kpis.sharpe_ratio || 0, 2)}</div>
             <div class="kpi-label">Sharpe Ratio</div>
         </div>
         <div class="kpi-item">
@@ -203,500 +260,427 @@ function renderPerformanceKpis() {
             <div class="kpi-label">Win Rate</div>
         </div>
         <div class="kpi-item">
-            <div class="kpi-value">${kpis.total_trades || 0}</div>
-            <div class="kpi-label">Total Trades</div>
+            <div class="kpi-value">${formatPercent(kpis.max_drawdown || 0)}</div>
+            <div class="kpi-label">Max Drawdown</div>
         </div>
     `;
 }
 
 function renderPnlChart() {
-    const container = document.getElementById('pnlChart');
-    const pnlData = dashboardData.dailyPnl || [];
-    
-    if (!pnlData.length) {
-        container.innerHTML = '<div class="no-data">No P&L data available</div>';
+    const container = document.getElementById("pnlChart");
+    if (!container || !dashboardData.dailyPnl?.length) {
+        if (container) {
+            container.innerHTML = '<div class="chart-placeholder">No P&L data available</div>';
+        }
         return;
     }
+
+    const data = dashboardData.dailyPnl.slice(-30); // Last 30 days
+    const maxAbs = Math.max(...data.map(d => Math.abs(d.pnl || 0)));
     
-    // Create simple bar chart
-    const maxPnl = Math.max(...pnlData.map(d => Math.abs(d.daily_pnl)));
-    const chartHeight = 160;
+    const chartHtml = `
+        <div class="simple-chart">
+            ${data.map(d => {
+                const pnl = d.pnl || 0;
+                const height = maxAbs > 0 ? Math.max(4, Math.abs(pnl) / maxAbs * 100) : 4;
+                const colorClass = pnl >= 0 ? 'chart-positive' : 'chart-negative';
+                return `<div class="chart-bar ${colorClass}" style="height: ${height}%" title="${formatCurrency(pnl)} on ${d.date}"></div>`;
+            }).join('')}
+        </div>
+    `;
     
-    const bars = pnlData.slice(-30).map(day => {
-        const height = maxPnl > 0 ? Math.abs(day.daily_pnl) / maxPnl * chartHeight * 0.8 : 4;
-        const className = day.daily_pnl >= 0 ? 'chart-positive' : 'chart-negative';
-        return `<div class="chart-bar ${className}" style="height: ${height}px" title="${day.date}: ${formatCurrency(day.daily_pnl)}"></div>`;
-    }).join('');
-    
-    container.innerHTML = `<div class="simple-chart">${bars}</div>`;
+    container.innerHTML = chartHtml;
 }
 
 function renderScatterChart() {
-    const container = document.getElementById('scatterChart');
-    const scatterData = dashboardData.scatterData || [];
-    
-    if (!scatterData.length) {
-        container.innerHTML = '<div class="no-data">No trade data available</div>';
+    const container = document.getElementById("scatterChart");
+    if (!container || !dashboardData.scatterData?.length) {
+        if (container) {
+            container.innerHTML = '<div class="chart-placeholder">No trade data available</div>';
+        }
         return;
     }
+
+    const data = dashboardData.scatterData.slice(0, 100); // Limit to 100 points
+    const maxHoldTime = Math.max(...data.map(d => d.hold_hours || 0));
+    const maxPnl = Math.max(...data.map(d => Math.abs(d.pnl || 0)));
     
-    // Create simple scatter plot
-    const maxHours = Math.max(...scatterData.map(d => d.hold_time_hours));
-    const maxPnl = Math.max(...scatterData.map(d => Math.abs(d.pnl)));
-    
-    const points = scatterData.map(trade => {
-        const x = maxHours > 0 ? (trade.hold_time_hours / maxHours) * 90 : 10;
-        const y = maxPnl > 0 ? (1 - Math.abs(trade.pnl) / maxPnl) * 90 : 50;
-        const className = trade.pnl >= 0 ? 'chart-positive' : 'chart-negative';
-        
-        return `<div class="scatter-point" style="left: ${x}%; top: ${y}%; background: ${trade.pnl >= 0 ? '#2e7d32' : '#d32f2f'}" title="Hold: ${trade.hold_time_hours.toFixed(1)}h, P&L: ${formatCurrency(trade.pnl)}"></div>`;
+    const pointsHtml = data.map(d => {
+        const x = maxHoldTime > 0 ? (d.hold_hours || 0) / maxHoldTime * 90 : 45;
+        const y = maxPnl > 0 ? 50 - ((d.pnl || 0) / maxPnl * 40) : 50;
+        const colorClass = (d.pnl || 0) >= 0 ? 'chart-positive' : 'chart-negative';
+        return `<div class="scatter-point ${colorClass}" style="left: ${x}%; bottom: ${y}%" title="Hold: ${d.hold_hours}h, P&L: ${formatCurrency(d.pnl)}"></div>`;
     }).join('');
     
-    container.innerHTML = `<div class="scatter-chart">${points}</div>`;
+    container.innerHTML = `<div class="scatter-chart">${pointsHtml}</div>`;
 }
 
 function renderPositions() {
-    const container = document.getElementById('positionsList');
+    const container = document.getElementById("positionsList");
+    if (!container) return;
+
     const positions = dashboardData.positions || [];
     
-    if (!positions.length) {
-        container.innerHTML = '<div class="no-data">No open positions</div>';
+    if (positions.length === 0) {
+        container.innerHTML = '<div class="no-data">No active positions</div>';
         return;
     }
-    
-    const positionItems = positions.slice(0, 10).map(pos => {
-        const pnlClass = pos.unrealized_pnl >= 0 ? 'kpi-positive' : 'kpi-negative';
-        
-        return `
-            <div class="position-item">
-                <div class="position-info">
-                    <h4>${truncateText(pos.market_title, 40)}</h4>
-                    <div class="position-details">
-                        ${pos.qty} shares @ ${formatCurrency(pos.vwap)} | Mark: ${formatCurrency(pos.mark_price)}
-                    </div>
-                </div>
-                <div class="position-pnl ${pnlClass}">
-                    ${formatCurrency(pos.unrealized_pnl)}
+
+    const positionsHtml = positions.map(pos => `
+        <div class="position-item">
+            <div class="position-info">
+                <h4>${pos.market_name || pos.market_id}</h4>
+                <div class="position-details">
+                    ${pos.side} • ${formatNumber(pos.qty)} @ ${formatPrice(pos.vwap)}
                 </div>
             </div>
-        `;
-    }).join('');
-    
-    container.innerHTML = positionItems;
+            <div class="position-pnl ${pos.unrealized_pnl >= 0 ? 'kpi-positive' : 'kpi-negative'}">
+                ${formatCurrency(pos.unrealized_pnl)}
+            </div>
+        </div>
+    `).join('');
+
+    container.innerHTML = positionsHtml;
 }
 
-function renderBacktests(backtests) {
-    const container = document.getElementById('recentBacktests');
-    
-    if (!backtests.length) {
+// Aspects data loading (placeholder)
+async function loadAspectsData() {
+    const quarterSel = document.getElementById("quarterSel");
+    if (quarterSel && quarterSel.value && quarterSel.value !== "Loading...") {
+        try {
+            const aspects = await safeFetch(`${BACKEND}/aspects?quarter=${quarterSel.value}`);
+            renderAspectsTable(aspects);
+        } catch (error) {
+            showToast(`Failed to load aspects: ${error.message}`, "error");
+        }
+    }
+}
+
+function renderAspectsTable(aspects) {
+    const tbody = document.querySelector("#aspectsTbl tbody");
+    if (!tbody) return;
+
+    if (!aspects || aspects.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="no-data">No aspects found for this quarter</td></tr>';
+        return;
+    }
+
+    const rowsHtml = aspects.map(aspect => `
+        <tr>
+            <td>${formatDateTime(aspect.peak_utc)}</td>
+            <td>${aspect.pair}</td>
+            <td>${aspect.aspect}</td>
+            <td>${formatDecimal(aspect.orb, 2)}°</td>
+            <td>${aspect.severity}</td>
+            <td>${aspect.eclipse ? 'Yes' : 'No'}</td>
+        </tr>
+    `).join('');
+
+    tbody.innerHTML = rowsHtml;
+}
+
+// Opportunities data loading (placeholder)
+async function loadOpportunitiesData() {
+    const container = document.getElementById("oppsList");
+    if (!container) return;
+
+    try {
+        const opportunities = await safeFetch(`${BACKEND}/opportunities/quarter`);
+        renderOpportunities(opportunities);
+    } catch (error) {
+        container.innerHTML = '<div class="no-data">Failed to load opportunities</div>';
+        showToast(`Failed to load opportunities: ${error.message}`, "error");
+    }
+}
+
+function renderOpportunities(opportunities) {
+    const container = document.getElementById("oppsList");
+    if (!container) return;
+
+    if (!opportunities || opportunities.length === 0) {
+        container.innerHTML = '<div class="no-data">No opportunities available</div>';
+        return;
+    }
+
+    const oppsHtml = opportunities.map(opp => `
+        <div class="card">
+            <div class="card-title">${opp.market_name || opp.market_id}</div>
+            <div class="card-metrics">
+                <div class="metric"><strong>Side:</strong> ${opp.side}</div>
+                <div class="metric"><strong>Price:</strong> ${formatPrice(opp.price)}</div>
+                <div class="metric"><strong>Edge:</strong> ${formatPercent(opp.edge)}</div>
+            </div>
+            <div class="decision ${opp.action?.toLowerCase() || 'hold'}">${opp.action || 'HOLD'}</div>
+        </div>
+    `).join('');
+
+    container.innerHTML = oppsHtml;
+}
+
+// Backtest data loading
+async function loadBacktestData() {
+    try {
+        const backtests = await safeFetch(`${BACKEND}/backtest/runs`);
+        renderRecentBacktests(backtests);
+    } catch (error) {
+        const container = document.getElementById("recentBacktests");
+        if (container) {
+            container.innerHTML = '<div class="no-data">Failed to load backtests</div>';
+        }
+        showToast(`Failed to load backtests: ${error.message}`, "error");
+    }
+}
+
+function renderRecentBacktests(backtests) {
+    const container = document.getElementById("recentBacktests");
+    if (!container) return;
+
+    if (!backtests || backtests.length === 0) {
         container.innerHTML = '<div class="no-data">No backtests found</div>';
         return;
     }
-    
-    const backestItems = backtests.map(bt => {
-        const statusClass = `status-${bt.status}`;
-        const metrics = bt.metrics || {};
-        const returnStr = metrics.total_return ? formatPercent(metrics.total_return) : '';
-        
-        return `
-            <div class="backtest-item">
-                <div class="backtest-info">
-                    <h4>${truncateText(bt.name, 25)}</h4>
-                    <div class="status ${statusClass}">${bt.status}</div>
-                </div>
-                <div class="backtest-metrics">
-                    ${returnStr && `<div>${returnStr}</div>`}
-                    <div>${formatDateTime(bt.created_at)}</div>
-                </div>
+
+    const backteststHtml = backtests.slice(0, 10).map(bt => `
+        <div class="backtest-item">
+            <div class="backtest-info">
+                <h4>${bt.name}</h4>
+                <div class="status status-${bt.status}">${bt.status.toUpperCase()}</div>
             </div>
-        `;
-    }).join('');
-    
-    container.innerHTML = backestItems;
+            <div class="backtest-metrics">
+                ${bt.metrics ? `
+                    Return: ${formatPercent(bt.metrics.total_return || 0)}<br>
+                    Sharpe: ${formatDecimal(bt.metrics.sharpe_ratio || 0, 2)}
+                ` : 'Running...'}
+            </div>
+        </div>
+    `).join('');
+
+    container.innerHTML = backteststHtml;
 }
 
-// Backtest form handling
-async function handleBacktestSubmit(event) {
+// Backtest form submission
+async function submitBacktest(event) {
     event.preventDefault();
     
-    const form = event.target;
-    const formData = new FormData(form);
-    
-    const config = {
-        name: formData.get('backtestName'),
-        start_date: formData.get('backtestStart') + 'T00:00:00Z',
-        end_date: formData.get('backtestEnd') + 'T23:59:59Z',
-        initial_capital: parseFloat(formData.get('initialCapital')),
-        scan_frequency: formData.get('scanFreq'),
-        lambda_gain: 0.10,
-        threshold: 0.04,
-        lambda_days: 5.0,
-        max_positions: 10,
-        max_position_size: 0.05,
-        fee_bps: 60
-    };
-    
+    if (isLoading) {
+        showToast("Please wait for current operation to complete", "info");
+        return;
+    }
+
     try {
         showLoading();
         
-        const response = await fetch(`${BACKEND}/backtest/start`, {
+        const formData = new FormData(event.target);
+        const request = {
+            name: formData.get('backtestName'),
+            start_date: formData.get('backtestStart') + 'T00:00:00Z',
+            end_date: formData.get('backtestEnd') + 'T23:59:59Z',
+            initial_capital: parseFloat(formData.get('initialCapital')),
+            scan_frequency: formData.get('scanFreq')
+        };
+
+        const response = await safeFetch(`${BACKEND}/backtest/start`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(config)
+            body: JSON.stringify(request)
         });
-        
-        if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
-        
-        const result = await response.json();
-        
-        // Reset form
-        form.reset();
-        
-        // Show success message
-        showError(`Backtest "${config.name}" started successfully! Run ID: ${result.test_run_id.substring(0, 8)}...`);
+
+        showToast(`Backtest started: ${response.test_run_id}`, "success");
         
         // Refresh backtest list
-        loadBacktestData();
+        await loadBacktestData();
+        
+        // Reset form
+        event.target.reset();
         
     } catch (error) {
-        console.error('Error starting backtest:', error);
-        showError(`Failed to start backtest: ${error.message}`);
+        showToast(`Backtest failed: ${error.message}`, "error");
     } finally {
         hideLoading();
     }
 }
 
-// Original API functions (kept for aspects and opportunities)
-async function fetchAspects(quarter) {
+// Utility formatting functions
+function formatCurrency(value) {
+    return new Intl.NumberFormat('en-US', {
+        style: 'currency',
+        currency: 'USD',
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+    }).format(value || 0);
+}
+
+function formatPercent(value) {
+    return new Intl.NumberFormat('en-US', {
+        style: 'percent',
+        minimumFractionDigits: 1,
+        maximumFractionDigits: 2
+    }).format((value || 0) / 100);
+}
+
+function formatPrice(value) {
+    return new Intl.NumberFormat('en-US', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 4
+    }).format(value || 0);
+}
+
+function formatNumber(value) {
+    return new Intl.NumberFormat('en-US').format(value || 0);
+}
+
+function formatDecimal(value, decimals = 2) {
+    return new Intl.NumberFormat('en-US', {
+        minimumFractionDigits: decimals,
+        maximumFractionDigits: decimals
+    }).format(value || 0);
+}
+
+function formatDateTime(dateStr) {
+    if (!dateStr) return 'N/A';
+    return new Date(dateStr).toLocaleString('en-US', {
+        month: 'short',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit'
+    });
+}
+
+// Initialize when DOM is fully loaded
+document.addEventListener('DOMContentLoaded', function() {
+    console.log('AstroEdge Mini-App initializing...');
+    
     try {
-        showLoading();
-        const response = await fetch(`${BACKEND}/astrology/aspects?quarter=${encodeURIComponent(quarter)}`);
-        if (!response.ok) {
-            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
-        const data = await response.json();
-        aspectsData = Array.isArray(data) ? data : (data.aspects || []);
-        renderAspects();
-    } catch (error) {
-        console.error('Error fetching aspects:', error);
-        showError(`Failed to load aspects: ${error.message}`);
-    } finally {
-        hideLoading();
-    }
-}
+        // Set up stable event listeners with error boundaries
+        const btnDashboard = document.getElementById('btnDashboard');
+        const btnAspects = document.getElementById('btnAspects');
+        const btnOpps = document.getElementById('btnOpps');
+        const btnBacktest = document.getElementById('btnBacktest');
+        const backtestForm = document.getElementById('backtestForm');
 
-async function scanOpportunities(quarter) {
+        // Tab button event listeners
+        if (btnDashboard) {
+            btnDashboard.addEventListener('click', () => {
+                try {
+                    showTab('dashboard');
+                } catch (error) {
+                    console.error('Dashboard tab error:', error);
+                    showToast('Error switching to dashboard', 'error');
+                }
+            });
+        }
+
+        if (btnAspects) {
+            btnAspects.addEventListener('click', () => {
+                try {
+                    showTab('aspects');
+                } catch (error) {
+                    console.error('Aspects tab error:', error);
+                    showToast('Error switching to aspects', 'error');
+                }
+            });
+        }
+
+        if (btnOpps) {
+            btnOpps.addEventListener('click', () => {
+                try {
+                    showTab('opps');
+                } catch (error) {
+                    console.error('Opportunities tab error:', error);
+                    showToast('Error switching to opportunities', 'error');
+                }
+            });
+        }
+
+        if (btnBacktest) {
+            btnBacktest.addEventListener('click', () => {
+                try {
+                    showTab('backtest');
+                } catch (error) {
+                    console.error('Backtest tab error:', error);
+                    showToast('Error switching to backtest', 'error');
+                }
+            });
+        }
+
+        // Backtest form submission
+        if (backtestForm) {
+            backtestForm.addEventListener('submit', submitBacktest);
+        }
+
+        // Modal close handlers
+        document.querySelectorAll('.close').forEach(closeBtn => {
+            closeBtn.addEventListener('click', function() {
+                this.closest('.modal')?.classList.add('hidden');
+            });
+        });
+
+        // Close modals when clicking outside
+        document.querySelectorAll('.modal').forEach(modal => {
+            modal.addEventListener('click', function(e) {
+                if (e.target === this) {
+                    this.classList.add('hidden');
+                }
+            });
+        });
+
+        // Initialize Telegram WebApp if available
+        if (window.Telegram?.WebApp) {
+            window.Telegram.WebApp.ready();
+            window.Telegram.WebApp.expand();
+        }
+
+        // Load initial quarters data
+        loadQuarters().catch(error => {
+            console.error('Failed to load quarters:', error);
+        });
+
+        // Show dashboard by default
+        showTab('dashboard');
+
+        console.log('✅ AstroEdge Mini-App initialized successfully');
+        showToast('App loaded successfully', 'success');
+
+    } catch (error) {
+        console.error('❌ Initialization error:', error);
+        showToast('App initialization failed', 'error');
+    }
+});
+
+// Load quarters for aspect/opportunity filtering
+async function loadQuarters() {
     try {
-        showLoading();
-        const scanResponse = await fetch(`${BACKEND}/scan-quarter`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
-                quarter: quarter,
-                lambda_gain: 0.10,
-                threshold: 0.04,
-                lambda_days: 5,
-                orb_limits: { square: 8, opposition: 8, conjunction: 6 },
-                K_cap: 5.0
-            })
-        });
+        // For now, use hardcoded quarters since endpoint may not exist
+        const quarters = [
+            { id: '2024-Q1', name: '2024 Q1' },
+            { id: '2024-Q2', name: '2024 Q2' },
+            { id: '2024-Q3', name: '2024 Q3' },
+            { id: '2024-Q4', name: '2024 Q4' },
+            { id: '2025-Q1', name: '2025 Q1' }
+        ];
         
-        if (!scanResponse.ok) {
-            throw new Error(`Scan failed: ${scanResponse.status} ${scanResponse.statusText}`);
+        const quarterSel = document.getElementById('quarterSel');
+        
+        if (quarterSel && quarters?.length > 0) {
+            quarterSel.innerHTML = quarters.map(q => 
+                `<option value="${q.id}">${q.name}</option>`
+            ).join('');
+            quarterSel.disabled = false;
         }
-        
-        const scanResult = await scanResponse.json();
-        opportunitiesData = scanResult.opportunities || [];
-        renderOpportunities();
     } catch (error) {
-        console.error('Error scanning opportunities:', error);
-        showError(`Failed to scan opportunities: ${error.message}`);
-    } finally {
-        hideLoading();
-    }
-}
-
-async function fetchOpportunityDetail(oppId, quarter) {
-    try {
-        const response = await fetch(`${BACKEND}/opportunities/${oppId}?quarter=${encodeURIComponent(quarter)}`);
-        if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
+        console.error('Failed to load quarters:', error);
+        const quarterSel = document.getElementById('quarterSel');
+        if (quarterSel) {
+            quarterSel.innerHTML = '<option>Failed to load</option>';
         }
-        const data = await response.json();
-        showOpportunityDetail(data);
-    } catch (error) {
-        console.error('Error fetching opportunity detail:', error);
-        showError(`Failed to load opportunity details: ${error.message}`);
     }
 }
 
-// Original render functions (kept for aspects and opportunities)
-function renderAspects() {
-    const tbody = document.querySelector('#aspectsTbl tbody');
-    const statsEl = document.getElementById('aspectsStats');
-    
-    if (!aspectsData.length) {
-        tbody.innerHTML = '<tr><td colspan="6" class="no-data">No aspects found for this quarter</td></tr>';
-        statsEl.innerHTML = '<div class="stat-card"><div class="stat-number">0</div><div class="stat-label">Aspects</div></div>';
-        return;
-    }
-    
-    // Render stats
-    const majorCount = aspectsData.filter(a => a.severity === 'major').length;
-    const eclipseCount = aspectsData.filter(a => a.is_eclipse).length;
-    
-    statsEl.innerHTML = `
-        <div class="stat-card">
-            <div class="stat-number">${aspectsData.length}</div>
-            <div class="stat-label">Total Aspects</div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-number">${majorCount}</div>
-            <div class="stat-label">Major Aspects</div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-number">${eclipseCount}</div>
-            <div class="stat-label">Eclipses</div>
-        </div>
-    `;
-    
-    // Render table
-    tbody.innerHTML = aspectsData.map(aspect => `
-        <tr>
-            <td>${formatDateTime(aspect.peak_utc)}</td>
-            <td><strong>${aspect.planet1}-${aspect.planet2}</strong></td>
-            <td>${aspect.aspect}</td>
-            <td>${aspect.orb_deg.toFixed(2)}°</td>
-            <td><span class="${aspect.severity}">${aspect.severity}</span></td>
-            <td>${aspect.is_eclipse ? '🌑☀️' : ''}</td>
-        </tr>
-    `).join('');
-}
-
-function renderOpportunities() {
-    const listEl = document.getElementById('oppsList');
-    const statsEl = document.getElementById('oppsStats');
-    
-    if (!opportunitiesData.length) {
-        listEl.innerHTML = '<div class="no-data">No opportunities found for this quarter</div>';
-        statsEl.innerHTML = '<div class="stat-card"><div class="stat-number">0</div><div class="stat-label">Opportunities</div></div>';
-        return;
-    }
-    
-    // Calculate stats
-    const buyCount = opportunitiesData.filter(o => o.decision?.toLowerCase() === 'buy').length;
-    const sellCount = opportunitiesData.filter(o => o.decision?.toLowerCase() === 'sell').length;
-    const avgEdge = opportunitiesData.reduce((sum, o) => sum + (o.edge_net || 0), 0) / opportunitiesData.length;
-    
-    statsEl.innerHTML = `
-        <div class="stat-card">
-            <div class="stat-number">${opportunitiesData.length}</div>
-            <div class="stat-label">Total Opportunities</div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-number">${buyCount}</div>
-            <div class="stat-label">Buy Signals</div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-number">${sellCount}</div>
-            <div class="stat-label">Sell Signals</div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-number">${formatPercent(avgEdge)}</div>
-            <div class="stat-label">Avg Edge</div>
-        </div>
-    `;
-    
-    // Render opportunities
-    listEl.innerHTML = opportunitiesData.map(opp => {
-        const decision = (opp.decision || 'hold').toLowerCase();
-        const decisionClass = decision;
-        
-        return `
-            <div class="card">
-                <div class="card-title">${truncateText(opp.title || 'Unknown Market')}</div>
-                <div class="card-metrics">
-                    <div class="metric">Base: <strong>${formatPercent(opp.p0 || 0)}</strong></div>
-                    <div class="metric">Astro: <strong>${formatPercent(opp.p_astro || 0)}</strong></div>
-                    <div class="metric">Edge: <strong>${formatPercent(opp.edge_net || 0)}</strong></div>
-                    <div class="metric">Size: <strong>${formatPercent(opp.size_fraction || 0)}</strong></div>
-                </div>
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 12px;">
-                    <span class="decision ${decisionClass}">${decision}</span>
-                    <button onclick="fetchOpportunityDetail('${opp.id}', '${currentQuarter}')">📊 Details</button>
-                </div>
-            </div>
-        `;
-    }).join('');
-}
-
-function showOpportunityDetail(data) {
-    const modal = document.getElementById('detailModal');
-    const content = document.getElementById('detailContent');
-    
-    const opp = data.opportunity;
-    const contribs = data.contributions || [];
-    const market = opp.markets || {};
-    
-    // Sort contributions by absolute value
-    const sortedContribs = contribs
-        .sort((a, b) => Math.abs(b.contribution || 0) - Math.abs(a.contribution || 0))
-        .slice(0, 10); // Top 10
-    
-    const detailHtml = `
-        <div>
-            <h4>${truncateText(market.title || 'Unknown Market', 50)}</h4>
-            
-            <div class="card-metrics" style="margin: 16px 0;">
-                <div class="metric">Base Prob: <strong>${formatPercent(opp.p0 || 0)}</strong></div>
-                <div class="metric">Astro Score: <strong>${(opp.s_astro || 0).toFixed(2)}</strong></div>
-                <div class="metric">Astro Prob: <strong>${formatPercent(opp.p_astro || 0)}</strong></div>
-                <div class="metric">Net Edge: <strong>${formatPercent(opp.edge_net || 0)}</strong></div>
-                <div class="metric">Size: <strong>${formatPercent(opp.size_fraction || 0)}</strong></div>
-            </div>
-            
-            <p><span class="decision ${(opp.decision || 'hold').toLowerCase()}">${(opp.decision || 'hold').toUpperCase()}</span></p>
-            
-            <h5>Contributing Aspects (${contribs.length})</h5>
-            ${sortedContribs.length ? `
-                <div style="max-height: 300px; overflow-y: auto;">
-                    ${sortedContribs.map(c => {
-                        const ae = c.aspect_events || {};
-                        const contribution = c.contribution || 0;
-                        const eclipse = ae.is_eclipse ? ' 🌑' : '';
-                        
-                        return `
-                            <div style="padding: 8px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between;">
-                                <div>
-                                    <strong>${ae.planet1 || '?'}-${ae.aspect || '?'}-${ae.planet2 || '?'}</strong>${eclipse}<br>
-                                    <small style="color: var(--hint-color);">${formatDateTime(ae.peak_utc || '')}</small>
-                                </div>
-                                <div style="text-align: right;">
-                                    <strong style="color: ${contribution > 0 ? '#2e7d32' : '#d32f2f'};">
-                                        ${contribution > 0 ? '+' : ''}${contribution.toFixed(2)}
-                                    </strong>
-                                </div>
-                            </div>
-                        `;
-                    }).join('')}
-                </div>
-            ` : '<p class="no-data">No contributing aspects found</p>'}
-        </div>
-    `;
-    
-    content.innerHTML = detailHtml;
-    modal.classList.remove('hidden');
-}
-
-// Event listeners
-function setupEventListeners() {
-    // Quarter selector
-    const quarterSel = document.getElementById('quarterSel');
-    quarterSel.addEventListener('change', (e) => {
-        currentQuarter = e.target.value;
-        // Clear previous data
-        aspectsData = [];
-        opportunitiesData = [];
-        dashboardData = {};
-        
-        // Re-render current section
-        const currentSection = document.querySelector('.tab-content:not(.hidden)');
-        if (currentSection) {
-            const sectionId = currentSection.id;
-            if (sectionId === 'aspectsSec' && currentQuarter) {
-                fetchAspects(currentQuarter);
-            } else if (sectionId === 'oppsSec' && currentQuarter) {
-                scanOpportunities(currentQuarter);
-            } else if (sectionId === 'dashboardSec') {
-                loadDashboardData();
-            }
-        }
-    });
-    
-    // Tab buttons
-    document.getElementById('btnDashboard').addEventListener('click', () => {
-        showSection('dashboardSec');
-    });
-    
-    document.getElementById('btnAspects').addEventListener('click', () => {
-        showSection('aspectsSec');
-        if (currentQuarter && !aspectsData.length) {
-            fetchAspects(currentQuarter);
-        }
-    });
-    
-    document.getElementById('btnOpps').addEventListener('click', () => {
-        showSection('oppsSec');
-        if (currentQuarter && !opportunitiesData.length) {
-            scanOpportunities(currentQuarter);
-        }
-    });
-    
-    document.getElementById('btnBacktest').addEventListener('click', () => {
-        showSection('backtestSec');
-    });
-    
-    // Backtest form
-    document.getElementById('backtestForm').addEventListener('submit', handleBacktestSubmit);
-    
-    // Modal close buttons
-    document.querySelectorAll('.close').forEach(closeBtn => {
-        closeBtn.addEventListener('click', (e) => {
-            e.target.closest('.modal').classList.add('hidden');
-        });
-    });
-    
-    // Close modals when clicking outside
-    document.querySelectorAll('.modal').forEach(modal => {
-        modal.addEventListener('click', (e) => {
-            if (e.target === modal) {
-                modal.classList.add('hidden');
-            }
-        });
-    });
-}
-
-// Initialize app
-function initializeApp() {
-    console.log('Initializing AstroEdge Mini-App...');
-    
-    // Setup Telegram Web App
-    if (window.Telegram && window.Telegram.WebApp) {
-        const webApp = window.Telegram.WebApp;
-        webApp.ready();
-        webApp.expand();
-        console.log('Telegram WebApp initialized');
-    }
-    
-    // Populate quarter selector
-    const quarterSel = document.getElementById('quarterSel');
-    const quarters = [currentQuarter(), nextQuarter()];
-    
-    quarterSel.innerHTML = quarters.map(q => 
-        `<option value="${q}">${q}</option>`
-    ).join('');
-    
-    quarterSel.disabled = false;
-    currentQuarter = quarters[0];
-    
-    // Set up form defaults
-    const today = new Date().toISOString().split('T')[0];
-    document.getElementById('backtestEnd').value = today;
-    
-    // Setup event listeners
-    setupEventListeners();
-    
-    // Show dashboard by default
-    showSection('dashboardSec');
-    
-    console.log('App initialized successfully');
-}
-
-// Start the app when DOM is ready
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initializeApp);
-} else {
-    initializeApp();
-}
+// Export for debugging
+window.AstroEdge = {
+    showTab,
+    loadTabData,
+    showToast,
+    safeFetch,
+    dashboardData,
+    currentTab
+};

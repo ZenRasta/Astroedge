@@ -49,8 +49,11 @@ origins = [
     "https://tg.dev",
     "http://localhost:5173",
     "http://localhost:8080",
+    "http://localhost:8003",  # Mini-App served from same port
     "http://127.0.0.1:5173",
     "http://127.0.0.1:8080",
+    "http://127.0.0.1:8003",  # Mini-App served from same port
+    "*",  # Allow all origins for development
 ]
 
 app.add_middleware(
