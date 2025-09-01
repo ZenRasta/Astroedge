@@ -307,6 +307,93 @@ button:disabled:hover {
   font-weight: bold;
 }
 
+/* Analysis Summary Table */
+.analysis-summary-table {
+  margin: 16px 0;
+  overflow-x: auto;
+}
+
+.analysis-summary-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.analysis-summary-table th,
+.analysis-summary-table td {
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid #eee;
+}
+
+.analysis-summary-table th {
+  font-weight: 600;
+  background-color: var(--secondary-bg);
+  position: sticky;
+  top: 0;
+}
+
+.analysis-summary-table .market-title {
+  font-weight: 500;
+  max-width: 200px;
+  word-wrap: break-word;
+}
+
+.decision-badge {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.decision-badge.decision-yes {
+  background-color: #e8f5e8;
+  color: #2e7d32;
+}
+
+.decision-badge.decision-no {
+  background-color: #ffebee;
+  color: #d32f2f;
+}
+
+.decision-badge.decision-skip {
+  background-color: #fff3e0;
+  color: #f57c00;
+}
+
+.btn-small {
+  padding: 4px 8px;
+  font-size: 12px;
+  border: 1px solid #ddd;
+  background: white;
+  color: #666;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.btn-small:hover {
+  background: #f5f5f5;
+  border-color: #bbb;
+}
+
+.section-header {
+  margin: 20px 0 12px;
+}
+
+.section-header h3 {
+  margin: 0 0 4px;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.section-header p {
+  margin: 0;
+  color: var(--hint-color);
+  font-size: 14px;
+}
+
 /* Loading indicator */
 #loadingIndicator {
   display: flex;

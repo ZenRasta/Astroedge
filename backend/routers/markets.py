@@ -265,18 +265,16 @@ def _sigmoid(x: float) -> float:
 
 
 @router.post("/markets/analyze")
-async def analyze_now(body: Dict[str, Any]) -> List[Dict[str, Any]]:
+async def analyze_now(body: Dict[str, Any]) -> Dict[str, Any]:
     """One-shot analysis for selected markets (no persistence unless CURATION_STORE_MODE=supabase).
 
     body: {
-      quarter: "YYYY-Qn",
-      market_ids: ["..."],
-      params: { lambda_gain, threshold, lambda_days, orb_limits, K_cap, fees_bps, slippage, size_cap }
+      markets: [{ id, title, deadline_utc, p_market, tags? }],
+      params?: { lambda_gain, threshold, lambda_days, orb_limits, K_cap, fees_bps, slippage, size_cap }
     }
     """
     try:
-        quarter = (body.get("quarter") or "").strip()
-        market_ids: List[str] = body.get("market_ids") or []
+        markets: List[Dict[str, Any]] = body.get("markets") or []
         params: Dict[str, Any] = body.get("params") or {}
 
         # Defaults
@@ -286,42 +284,78 @@ async def analyze_now(body: Dict[str, Any]) -> List[Dict[str, Any]]:
         slippage = float(params.get("slippage", 0.005))
         size_cap = float(params.get("size_cap", 0.05))
 
-        # Fetch market snapshots
-        results: List[Dict[str, Any]] = []
+        # Analyze market snapshots
+        analyses: List[Dict[str, Any]] = []
         
-        if settings.curation_store_mode != "supabase":
-            # Stateless mode: return minimal analysis without database lookups
-            logger.info("markets/analyze: CURATION_STORE_MODE not set to supabase, using stateless mode")
-            for mid in market_ids:
-                # Use default values for stateless analysis
-                p0 = 0.5  # Default market price
+        for market in markets:
+            market_id = market.get("id")
+            title = market.get("title") or f"Market {market_id}"
+            deadline_utc = market.get("deadline_utc")
+            p_market = float(market.get("p_market") or 0.5)
+            tags = market.get("tags") or []
+            
+            if settings.curation_store_mode != "supabase":
+                # Stateless mode: return minimal analysis without database lookups
                 s_astro = 0.0  # No astro contributions in stateless mode
+            else:
+                # Database mode: fetch astro contributions for this quarter
+                try:
+                    quarter = "2025-Q3"  # Default quarter for now
+                    contribs = await fetch_contributions_for_market_quarter(market_id, quarter)
+                    s_astro = float(sum((c.get("contribution") or 0.0) for c in contribs))
+                except Exception as e:
+                    logger.warning(f"Failed to fetch contributions for {market_id}: {e}")
+                    s_astro = 0.0
                 
-                # Decision math with defaults
-                p_astro = max(0.02, min(0.98, _sigmoid(_logit(p0) + lambda_gain * s_astro)))
-                edge_gross = abs(p_astro - p0)
-                costs = (fees_bps / 10000.0) + slippage
-                edge_net = edge_gross - costs
-                
-                decision = "HOLD"
-                if edge_net >= threshold:
-                    decision = "BUY" if p_astro > p0 else "SELL"
-                
-                size_fraction = min(size_cap, max(0.0, edge_net * 2))
-                
-                results.append({
-                    "market_id": mid,
-                    "title": f"Market {mid}",
-                    "deadline_utc": None,
-                    "tags": [],
-                    "p0": p0,
-                    "s_astro": s_astro,
-                    "p_astro": p_astro,
-                    "edge_net": edge_net,
-                    "decision": decision,
-                    "size_fraction": size_fraction,
-                })
-        else:
+            # Decision math
+            p_model = max(0.02, min(0.98, _sigmoid(_logit(p_market) + lambda_gain * s_astro)))
+            edge_gross = abs(p_model - p_market)
+            costs = (fees_bps / 10000.0) + slippage
+            edge_net = edge_gross - costs
+            
+            # Decision logic
+            decision_side = "SKIP"
+            if edge_net >= threshold:
+                decision_side = "YES" if p_model > p_market else "NO"
+            
+            # Confidence based on edge strength
+            confidence = min(1.0, max(0.0, edge_net * 5))  # Scale edge to confidence
+            
+            size_fraction = min(size_cap, max(0.0, edge_net * 2))
+            
+            analyses.append({
+                "market_id": market_id,
+                "title": title,
+                "deadline_utc": deadline_utc,
+                "prior": {
+                    "p_market": p_market
+                },
+                "posterior": {
+                    "p_model": p_model
+                },
+                "decision": {
+                    "side": decision_side
+                },
+                "confidence": confidence,
+                "edges": {
+                    "yes": edge_net if decision_side == "YES" else -edge_net,
+                    "no": edge_net if decision_side == "NO" else -edge_net
+                },
+                "flags": [
+                    "astro_eligible" if s_astro > 0 else None,
+                    "astro_included" if s_astro > 0 else None
+                ],
+                "reasons": [
+                    f"Edge: {edge_net:.3f}",
+                    f"Astro score: {s_astro:.3f}" if s_astro > 0 else "No astro data"
+                ],
+                "evidence_cards": [],
+                "tags": tags,
+                "s_astro": s_astro,
+                "size_fraction": size_fraction
+            })
+        
+        if False:  # Legacy database mode kept for reference
             # Database mode: full analysis with market data and contributions
             for mid in market_ids:
                 # Prefer canonical markets; fallback to markets_cache (from /api scan)
@@ -377,7 +411,7 @@ async def analyze_now(body: Dict[str, Any]) -> List[Dict[str, Any]]:
                     }
                 )
 
-        return results
+        return {"analyses": analyses}
     except HTTPException:
         raise
     except Exception as e:

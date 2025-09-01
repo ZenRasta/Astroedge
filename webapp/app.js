@@ -453,7 +453,9 @@ async function onUpcoming(category = null) {
     try {
         if (btn) btn.disabled = true;
         const res = await api(`/api/markets/upcoming?${params.toString()}`);
-        renderUpcoming(res?.markets || []);
+        const markets = res?.markets || [];
+        window.lastUpcomingMarkets = markets; // Store for analysis
+        renderUpcoming(markets);
         showToast(`Found ${res?.count ?? 0} markets (fetched ${new Date(res?.now_utc || Date.now()).toLocaleString()})`, 'success');
     } catch (err) {
         showToast(`Failed to load upcoming: ${err.message}`, 'error');
@@ -476,21 +478,86 @@ async function onCategories() {
     }
 }
 
-async function onAnalyzeMarket(marketId) {
-    const q = normQuarter(document.getElementById('quarterSel')?.value || getCurrentQuarter());
+async function onAnalyzeMarket(marketId, marketData = null) {
+    // Find market data from currently loaded markets
+    let market = marketData;
+    if (!market) {
+        // Try to find market from the last loaded upcoming markets
+        const upcomingEl = document.getElementById('upcomingList');
+        if (upcomingEl && window.lastUpcomingMarkets) {
+            market = window.lastUpcomingMarkets.find(m => m.id === marketId);
+        }
+    }
+    
+    if (!market) {
+        showToast('Market data not available for analysis', 'error');
+        return;
+    }
+
     const payload = {
-        quarter: q,
-        market_ids: [marketId],
-        params: { lambda_gain:0.10, threshold:0.04, lambda_days:5,
-                  orb_limits:{square:8,opposition:8,conjunction:6}, K_cap:5,
-                  fees_bps:60, slippage:0.005, size_cap:0.05 }
+        markets: [{
+            id: market.id,
+            title: market.question || market.title,
+            deadline_utc: market.endDate || market.deadline_utc,
+            p_market: market.p_market_mid || market.price_mid || market.price_yes_mid || market.price_yes || 0.5,
+            tags: market.tags || market.category_tags || []
+        }],
+        params: { 
+            lambda_gain: 0.10, 
+            threshold: 0.04, 
+            lambda_days: 5,
+            orb_limits: {square:8, opposition:8, conjunction:6}, 
+            K_cap: 5,
+            fees_bps: 60, 
+            slippage: 0.005, 
+            size_cap: 0.05 
+        }
     };
+    
     try {
-        const out = await api(`/markets/analyze`, { method: 'POST', body: JSON.stringify(payload) });
-        renderAnalysis(out || []);
+        const response = await api(`/markets/analyze`, { method: 'POST', body: JSON.stringify(payload) });
+        const analyses = response?.analyses || [];
+        
+        if (analyses.length > 0) {
+            // Persist analysis results to curated store
+            const items = analyses.map(a => ({
+                curation_id: generateCurationId(),
+                market_id: a.market_id,
+                title: a.title,
+                deadline_utc: a.deadline_utc,
+                price_mid: a?.prior?.p_market ?? null,
+                tags: payload.markets[0].tags || [],
+                decision: a?.decision?.side || 'SKIP',
+                confidence: a?.confidence ?? null,
+                p_model: a?.posterior?.p_model ?? a?.prior?.p_market ?? null,
+                edge_yes: a?.edges?.yes ?? null,
+                edge_no: a?.edges?.no ?? null,
+                astro_included: a?.flags?.includes('astro_included') || false,
+                astro_eligible: a?.flags?.includes('astro_eligible') || false,
+                reasons: a?.reasons || [],
+                evidence: a?.evidence_cards || [],
+                red_flags: [],
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString(),
+            }));
+            
+            if (window.Curations) {
+                window.Curations.upsertCurations(items);
+                showToast(`Analysis complete: ${items[0].decision} (${Math.round((items[0].confidence || 0) * 100)}% confidence)`, 'success');
+                updateRecentAnalysis(); // Update inline summary
+            } else {
+                showToast('Curations system not available', 'error');
+            }
+        }
+        
+        renderAnalysis(analyses);
     } catch (err) {
         showToast(`Analyze failed: ${err.message}`, 'error');
     }
+}
+
+function generateCurationId() {
+    return 'curation_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now().toString(36);
 }
 
 function onAddToCurated(marketId, title, deadline) {
@@ -610,23 +677,134 @@ function renderCurated() {
         return;
     }
     
-    el.innerHTML = filtered.map(c => `
-        <div class="card">
-          <div class="card-title">${c.title || 'Untitled Market'}</div>
-          <div class="card-metrics">
-            <div class="metric"><strong>Deadline:</strong> ${formatDateTime(c.deadline_utc)}</div>
-            <div class="metric"><strong>Decision:</strong> <span class="decision-${c.decision?.toLowerCase() || 'unknown'}">${c.decision || 'UNKNOWN'}</span></div>
-            <div class="metric"><strong>Confidence:</strong> ${c.confidence ? `${c.confidence}%` : 'N/A'}</div>
-            <div class="metric"><strong>Created:</strong> ${formatDateTime(c.created_at)}</div>
-          </div>
-          <div>
-            ${(c.tags || []).map(t => `<span class="chip">${t}</span>`).join(' ')}
-          </div>
-          <div style="margin-top:8px;">
-            <button class="btn-secondary" onclick="onRemoveCurated('${c.market_id}')">Remove</button>
-          </div>
+    // Separate analyzed vs manually curated
+    const analyzed = filtered.filter(c => c.p_model !== null && c.p_model !== undefined);
+    const manual = filtered.filter(c => c.p_model === null || c.p_model === undefined);
+    
+    let html = '';
+    
+    if (analyzed.length > 0) {
+        html += `
+        <div class="section-header">
+            <h3>Analysis Summary</h3>
+            <p>${analyzed.length} analyzed markets</p>
         </div>
-    `).join('');
+        ${renderAnalysisSummaryTable(analyzed)}
+        <div style="margin: 24px 0;"></div>
+        `;
+    }
+    
+    if (manual.length > 0) {
+        html += `
+        <div class="section-header">
+            <h3>Manually Curated</h3>
+            <p>${manual.length} manually added markets</p>
+        </div>
+        `;
+        
+        html += manual.map(c => `
+            <div class="card">
+              <div class="card-title">${c.title || 'Untitled Market'}</div>
+              <div class="card-metrics">
+                <div class="metric"><strong>Deadline:</strong> ${formatDateTime(c.deadline_utc)}</div>
+                <div class="metric"><strong>Decision:</strong> <span class="decision-${c.decision?.toLowerCase() || 'unknown'}">${c.decision || 'UNKNOWN'}</span></div>
+                <div class="metric"><strong>Confidence:</strong> ${c.confidence ? `${Math.round(c.confidence * 100)}%` : 'N/A'}</div>
+                <div class="metric"><strong>Created:</strong> ${formatDateTime(c.created_at)}</div>
+              </div>
+              <div>
+                ${(c.tags || []).map(t => `<span class="chip">${t}</span>`).join(' ')}
+              </div>
+              <div style="margin-top:8px;">
+                <button class="btn-secondary" onclick="onRemoveCurated('${c.market_id}')">Remove</button>
+              </div>
+            </div>
+        `).join('');
+    }
+    
+    el.innerHTML = html;
+}
+
+function renderAnalysisSummaryTable(rows) {
+    if (!rows || rows.length === 0) return '';
+    
+    // Sort by deadline ascending
+    const sorted = [...rows].sort((a, b) => {
+        const aDate = new Date(a.deadline_utc || 0);
+        const bDate = new Date(b.deadline_utc || 0);
+        return aDate - bDate;
+    });
+    
+    const formatUTC = (iso) => {
+        if (!iso) return '—';
+        try { 
+            return new Date(iso).toISOString().replace('.000Z', 'Z'); 
+        } catch { 
+            return iso; 
+        }
+    };
+    
+    const formatConf = (x) => {
+        if (x === null || x === undefined || Number.isNaN(x)) return '—';
+        return `${Math.round(x * 100)}%`;
+    };
+    
+    return `
+        <div class="analysis-summary-table">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Market</th>
+                        <th>Resolution (UTC)</th>
+                        <th>Decision</th>
+                        <th>Confidence</th>
+                        <th>P(Model)</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${sorted.map(r => `
+                        <tr>
+                            <td class="market-title">${r.title || 'Untitled'}</td>
+                            <td>${formatUTC(r.deadline_utc)}</td>
+                            <td>
+                                ${r.decision ? `
+                                    <span class="decision-badge decision-${r.decision.toLowerCase()}">
+                                        ${r.decision}
+                                    </span>
+                                ` : '—'}
+                            </td>
+                            <td>${formatConf(r.confidence)}</td>
+                            <td>${r.p_model ? `${Math.round(r.p_model * 100)}%` : '—'}</td>
+                            <td>
+                                <button class="btn-small" onclick="onRemoveCurated('${r.market_id}')">Remove</button>
+                            </td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        </div>
+    `;
+}
+
+function updateRecentAnalysis() {
+    const container = document.getElementById('recentAnalysis');
+    const listEl = document.getElementById('recentAnalysisList');
+    
+    if (!container || !listEl || !window.Curations) return;
+    
+    const curations = window.Curations.loadCurations();
+    const analyzed = curations
+        .filter(c => c.p_model !== null && c.p_model !== undefined)
+        .sort((a, b) => new Date(b.updated_at || b.created_at) - new Date(a.updated_at || a.created_at))
+        .slice(0, 5);
+    
+    if (analyzed.length === 0) {
+        container.classList.add('hidden');
+        return;
+    }
+    
+    container.classList.remove('hidden');
+    listEl.innerHTML = renderAnalysisSummaryTable(analyzed);
 }
 
 function updateCuratedStats() {
@@ -856,7 +1034,12 @@ document.addEventListener('DOMContentLoaded', function() {
 
         if (btnUpcoming) {
             btnUpcoming.addEventListener('click', () => {
-                try { showTab('upcoming'); } catch (e) { console.error(e); }
+                try { 
+                    showTab('upcoming'); 
+                    updateRecentAnalysis(); // Show recent analysis
+                } catch (e) { 
+                    console.error(e); 
+                }
             });
         }
 
