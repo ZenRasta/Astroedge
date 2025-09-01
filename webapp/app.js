@@ -794,9 +794,7 @@ function updateRecentAnalysis() {
     // Filter for analyzed markets (those with decision)
     const analyzed = curations
         .filter(c => !!c.decision)
-        .sort((a, b) => new Date(b.updated_at || b.created_at) - new Date(a.updated_at || a.created_at))
-        .slice(0, 5)
-        .reverse(); // Show most recent first
+        .sort((a, b) => new Date(b.updated_at || b.created_at) - new Date(a.updated_at || a.created_at)); // Newest first, no cap
     
     if (analyzed.length === 0) {
         container.classList.add('hidden');
