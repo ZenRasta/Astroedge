@@ -1,14 +1,21 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 import logging
+import os
 
 try:
     from .config import settings
     from .supabase_client import supabase
+    from .routers import astrology, impact_map, polymarket, opportunities, trading, analytics
+    from .services.astrology import get_engine
 except ImportError:
     from config import settings
     from supabase_client import supabase
+    from routers import astrology, impact_map, polymarket, opportunities, trading, analytics
+    from services.astrology import get_engine
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +24,15 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """Application lifespan context manager."""
     logger.info("Starting AstroEdge API...")
+    
+    # Pre-initialize astrology engine
+    try:
+        engine = get_engine()
+        engine.initialize()
+        logger.info("Astrology engine pre-initialized successfully")
+    except Exception as e:
+        logger.warning(f"Failed to pre-initialize astrology engine: {e}")
+    
     yield
     logger.info("Shutting down AstroEdge API...")
 
@@ -27,6 +43,37 @@ app = FastAPI(
     version=settings.app_version,
     lifespan=lifespan,
 )
+
+# Configure CORS for Mini-App
+origins = [
+    "https://tg.dev",
+    "http://localhost:5173",
+    "http://localhost:8080",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:8080",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Include routers
+app.include_router(astrology.router)
+app.include_router(impact_map.router)
+app.include_router(polymarket.router)
+app.include_router(opportunities.router)
+app.include_router(trading.router)
+app.include_router(analytics.router)
+
+# Mount static files for Mini-App
+webapp_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "webapp")
+if os.path.exists(webapp_path):
+    app.mount("/miniapp", StaticFiles(directory=webapp_path, html=True), name="miniapp")
+    logger.info(f"Mini-App mounted at /miniapp (serving from {webapp_path})")
 
 
 @app.get("/health")

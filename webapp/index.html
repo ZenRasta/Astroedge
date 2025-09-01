@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>AstroEdge - Opportunities</title>
+  <link rel="stylesheet" href="styles.css"/>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body>
+  <header>
+    <h1>🌟 AstroEdge</h1>
+    <div id="quarterRow">
+      <label for="quarterSel">Quarter:</label>
+      <select id="quarterSel" disabled>
+        <option>Loading...</option>
+      </select>
+      <button id="btnDashboard" class="tab-btn">📊 Dashboard</button>
+      <button id="btnAspects" class="tab-btn">🌟 Aspects</button>
+      <button id="btnOpps" class="tab-btn">📈 Opportunities</button>
+      <button id="btnBacktest" class="tab-btn">🧪 Backtest</button>
+    </div>
+    <div id="loadingIndicator" class="hidden">
+      <div class="spinner"></div>
+      <span>Loading...</span>
+    </div>
+  </header>
+
+  <!-- Dashboard Section -->
+  <section id="dashboardSec" class="tab-content hidden">
+    <h2>📊 Portfolio Dashboard</h2>
+    
+    <!-- Portfolio Summary -->
+    <div class="dashboard-grid">
+      <div class="card">
+        <h3>💰 Portfolio Summary</h3>
+        <div id="portfolioSummary" class="kpi-grid">
+          <div class="no-data">Loading portfolio data...</div>
+        </div>
+      </div>
+      
+      <div class="card">
+        <h3>📈 Performance KPIs</h3>
+        <div id="performanceKpis" class="kpi-grid">
+          <div class="no-data">Loading performance metrics...</div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Charts Row -->
+    <div class="dashboard-grid">
+      <div class="card">
+        <h3>📊 Daily P&L (Last 30 Days)</h3>
+        <div id="pnlChart" class="chart-container">
+          <div class="no-data">Loading P&L chart...</div>
+        </div>
+      </div>
+      
+      <div class="card">
+        <h3>⭐ Trade Scatter (Hold Time vs P&L)</h3>
+        <div id="scatterChart" class="chart-container">
+          <div class="no-data">Loading trade data...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Current Positions -->
+    <div class="card">
+      <h3>📊 Current Positions</h3>
+      <div id="positionsList">
+        <div class="no-data">Loading positions...</div>
+      </div>
+    </div>
+  </section>
+
+  <section id="aspectsSec" class="tab-content hidden">
+    <h2>Quarter Aspects</h2>
+    <div id="aspectsStats" class="stats-row"></div>
+    <div class="table-container">
+      <table id="aspectsTbl">
+        <thead>
+          <tr>
+            <th>Peak (UTC)</th>
+            <th>Pair</th>
+            <th>Aspect</th>
+            <th>Orb°</th>
+            <th>Severity</th>
+            <th>Eclipse</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td colspan="6" class="no-data">Select a quarter to view aspects</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="oppsSec" class="tab-content hidden">
+    <h2>Opportunities</h2>
+    <div id="oppsStats" class="stats-row"></div>
+    <div id="oppsList">
+      <div class="no-data">Select a quarter and click scan to view opportunities</div>
+    </div>
+  </section>
+
+  <!-- Backtest Section -->
+  <section id="backtestSec" class="tab-content hidden">
+    <h2>🧪 Backtesting</h2>
+    
+    <div class="dashboard-grid">
+      <!-- Backtest Configuration -->
+      <div class="card">
+        <h3>⚙️ New Backtest</h3>
+        <form id="backtestForm">
+          <div class="form-group">
+            <label for="backtestName">Name:</label>
+            <input type="text" id="backtestName" name="backtestName" placeholder="My Backtest Strategy" required>
+          </div>
+          
+          <div class="form-row">
+            <div class="form-group">
+              <label for="backtestStart">Start Date:</label>
+              <input type="date" id="backtestStart" name="backtestStart" value="2024-01-01" required>
+            </div>
+            <div class="form-group">
+              <label for="backtestEnd">End Date:</label>
+              <input type="date" id="backtestEnd" name="backtestEnd" value="2024-12-31" required>
+            </div>
+          </div>
+          
+          <div class="form-row">
+            <div class="form-group">
+              <label for="initialCapital">Initial Capital ($):</label>
+              <input type="number" id="initialCapital" name="initialCapital" value="1000" min="100" step="100" required>
+            </div>
+            <div class="form-group">
+              <label for="scanFreq">Scan Frequency:</label>
+              <select id="scanFreq" name="scanFreq" required>
+                <option value="daily">Daily</option>
+                <option value="hourly">Hourly</option>
+              </select>
+            </div>
+          </div>
+          
+          <button type="submit" class="btn-primary">🚀 Start Backtest</button>
+        </form>
+      </div>
+      
+      <!-- Recent Backtests -->
+      <div class="card">
+        <h3>📈 Recent Backtests</h3>
+        <div id="recentBacktests">
+          <div class="no-data">Loading backtest runs...</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Error Modal -->
+  <div id="errorModal" class="modal hidden">
+    <div class="modal-content">
+      <span class="close">&times;</span>
+      <h3>Error</h3>
+      <p id="errorMessage"></p>
+    </div>
+  </div>
+
+  <!-- Detail Modal -->
+  <div id="detailModal" class="modal hidden">
+    <div class="modal-content">
+      <span class="close">&times;</span>
+      <h3>Opportunity Details</h3>
+      <div id="detailContent"></div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

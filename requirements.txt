@@ -21,5 +21,9 @@ ruff==0.1.6
 black==23.11.0
 mypy==1.7.1
 
+# Astrology engine dependencies
+skyfield==1.48
+numpy==1.26.2
+
 # Optional: actual Supabase client (if you want to use it instead of httpx)
 # supabase==2.0.2

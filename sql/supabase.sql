@@ -266,7 +266,81 @@ create trigger trg_app_config_updated before update on app_config
 for each row execute function set_updated_at();
 
 -- =========
--- RLS (optional; keep disabled for service role usage)
+-- Analytics & Backtesting Tables (Session 9)
+-- =========
+create table if not exists test_runs (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  type text not null check (type in ('backtest', 'forwardtest')),
+  config jsonb not null,
+  start_date timestamptz not null,
+  end_date timestamptz,
+  status text not null default 'running' check (status in ('running', 'completed', 'failed', 'stopped')),
+  metrics jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists idx_test_runs_type_status on test_runs (type, status);
+create index if not exists idx_test_runs_created on test_runs (created_at desc);
+drop trigger if exists trg_test_runs_updated on test_runs;
+create trigger trg_test_runs_updated before update on test_runs
+for each row execute function set_updated_at();
+
+create table if not exists test_trades (
+  id uuid primary key default gen_random_uuid(),
+  test_run_id uuid not null references test_runs(id) on delete cascade,
+  market_id text references markets(id),
+  opportunity_id uuid references opportunities(id),
+  side text not null check (side in ('YES', 'NO')),
+  qty double precision not null check (qty > 0),
+  entry_price double precision not null check (entry_price between 0 and 1),
+  exit_price double precision check (exit_price between 0 and 1),
+  entry_time timestamptz not null,
+  exit_time timestamptz,
+  fees double precision not null default 0,
+  realized_pnl double precision,
+  outcome smallint check (outcome in (0, 1)),
+  metadata jsonb,
+  created_at timestamptz not null default now()
+);
+create index if not exists idx_test_trades_run on test_trades (test_run_id);
+create index if not exists idx_test_trades_market on test_trades (market_id);
+create index if not exists idx_test_trades_entry_time on test_trades (entry_time);
+
+create table if not exists test_equity (
+  id uuid primary key default gen_random_uuid(),
+  test_run_id uuid not null references test_runs(id) on delete cascade,
+  ts timestamptz not null,
+  equity_usdc double precision not null,
+  realized_pnl double precision not null default 0,
+  unrealized_pnl double precision not null default 0,
+  fees_usdc double precision not null default 0,
+  positions_count integer not null default 0,
+  created_at timestamptz not null default now()
+);
+create index if not exists idx_test_equity_run_ts on test_equity (test_run_id, ts);
+
+create table if not exists test_opportunities (
+  id uuid primary key default gen_random_uuid(),
+  test_run_id uuid not null references test_runs(id) on delete cascade,
+  market_id text references markets(id),
+  scan_time timestamptz not null,
+  p0 double precision not null check (p0 between 0 and 1),
+  p_astro double precision not null check (p_astro between 0 and 1),
+  edge_net double precision not null,
+  decision text not null check (decision in ('BUY', 'SELL', 'HOLD')),
+  size_fraction double precision not null check (size_fraction between 0 and 1),
+  executed boolean not null default false,
+  execution_price double precision check (execution_price between 0 and 1),
+  execution_qty double precision check (execution_qty >= 0),
+  metadata jsonb,
+  created_at timestamptz not null default now()
+);
+create index if not exists idx_test_opps_run_scan on test_opportunities (test_run_id, scan_time);
+create index if not exists idx_test_opps_executed on test_opportunities (test_run_id, executed);
+
+-- =========
+-- RLS (optional; keep disabled for service role usage)  
 -- =========
 -- alter table <name> enable row level security;
 -- (Add policies later if exposing anon client directly)
