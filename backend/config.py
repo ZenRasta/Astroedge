@@ -74,6 +74,11 @@ class Settings(BaseSettings):
     max_per_market_usdc: float = Field(default=1000.0, env="MAX_PER_MARKET_USDC")
     max_per_theme_usdc: float = Field(default=2500.0, env="MAX_PER_THEME_USDC")
     daily_max_drawdown_usdc: float = Field(default=250.0, env="DAILY_MAX_DRAWDOWN_USDC")
+    
+    # Feature Flags - Safe defaults (production/dev works even if env is missing)
+    markets_cache_mode: str = Field(default="none", env="MARKETS_CACHE_MODE")  # none | supabase
+    curation_store_mode: str = Field(default="none", env="CURATION_STORE_MODE")  # none | supabase
+    gamma_api_url: str = Field(default="https://gamma-api.polymarket.com", env="GAMMA_API_URL")
 
     class Config:
         env_file = ".env"

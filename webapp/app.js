@@ -493,6 +493,32 @@ async function onAnalyzeMarket(marketId) {
     }
 }
 
+function onAddToCurated(marketId, title, deadline) {
+    try {
+        const curation = {
+            market_id: marketId,
+            title: title,
+            deadline_utc: deadline,
+            tags: [],
+            red_flags: [],
+            astro_eligible: false,
+            astro_included: false,
+            decision: 'SKIP',
+            confidence: null,
+            reasons: []
+        };
+        
+        if (window.Curations) {
+            window.Curations.upsertCurations([curation]);
+            showToast(`Added "${title}" to curated list`, 'success');
+        } else {
+            showToast('Curations system not available', 'error');
+        }
+    } catch (err) {
+        showToast(`Failed to add to curated: ${err.message}`, 'error');
+    }
+}
+
 function renderUpcoming(list) {
     const el = document.getElementById('upcomingList');
     if (!el) return;
@@ -515,7 +541,10 @@ function renderUpcoming(list) {
           <div>
             ${tags.map(t => `<span class="chip">${t}</span>`).join(' ')}
           </div>
-          <div style="margin-top:8px"><button class="btn-primary" onclick="onAnalyzeMarket('${m.id}')">Analyze</button></div>
+          <div style="margin-top:8px; display:flex; gap:8px;">
+            <button class="btn-primary" onclick="onAnalyzeMarket('${m.id}')">Analyze</button>
+            <button class="btn-secondary" onclick="onAddToCurated('${m.id}', '${m.question || m.title}', '${m.endDate}')">Add to Curated</button>
+          </div>
         </div>
     `; }).join('');
 }
@@ -544,6 +573,101 @@ function renderAnalysis(out) {
     const r = out[0];
     const pct = (x)=> `${(x*100).toFixed(1)}%`;
     showToast(`p0 ${pct(r.p0)} → p_astro ${pct(r.p_astro)} | edge ${pct(r.edge_net)} | ${r.decision}`,'success');
+}
+
+function onCurated() {
+    try {
+        renderCurated();
+        updateCuratedStats();
+    } catch (err) {
+        showToast(`Failed to load curated markets: ${err.message}`, 'error');
+    }
+}
+
+function renderCurated() {
+    const el = document.getElementById('curatedList');
+    if (!el) return;
+    
+    if (!window.Curations) {
+        el.innerHTML = '<div class="no-data">Curations system not available</div>';
+        return;
+    }
+    
+    const curations = window.Curations.loadCurations();
+    const searchTerm = document.getElementById('curatedSearch')?.value.toLowerCase() || '';
+    const decisionFilter = document.getElementById('curatedFilter')?.value || '';
+    
+    let filtered = curations;
+    if (searchTerm) {
+        filtered = filtered.filter(c => c.title?.toLowerCase().includes(searchTerm));
+    }
+    if (decisionFilter) {
+        filtered = filtered.filter(c => c.decision === decisionFilter);
+    }
+    
+    if (filtered.length === 0) {
+        el.innerHTML = '<div class="no-data">No curated markets match your criteria</div>';
+        return;
+    }
+    
+    el.innerHTML = filtered.map(c => `
+        <div class="card">
+          <div class="card-title">${c.title || 'Untitled Market'}</div>
+          <div class="card-metrics">
+            <div class="metric"><strong>Deadline:</strong> ${formatDateTime(c.deadline_utc)}</div>
+            <div class="metric"><strong>Decision:</strong> <span class="decision-${c.decision?.toLowerCase() || 'unknown'}">${c.decision || 'UNKNOWN'}</span></div>
+            <div class="metric"><strong>Confidence:</strong> ${c.confidence ? `${c.confidence}%` : 'N/A'}</div>
+            <div class="metric"><strong>Created:</strong> ${formatDateTime(c.created_at)}</div>
+          </div>
+          <div>
+            ${(c.tags || []).map(t => `<span class="chip">${t}</span>`).join(' ')}
+          </div>
+          <div style="margin-top:8px;">
+            <button class="btn-secondary" onclick="onRemoveCurated('${c.market_id}')">Remove</button>
+          </div>
+        </div>
+    `).join('');
+}
+
+function updateCuratedStats() {
+    const el = document.getElementById('curatedStats');
+    if (!el || !window.Curations) return;
+    
+    const stats = window.Curations.getCurationStats();
+    
+    el.innerHTML = `
+        <div class="stat-card">
+            <div class="stat-number">${stats.total}</div>
+            <div class="stat-label">Total Curated</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-number">${stats.by_decision.YES || 0}</div>
+            <div class="stat-label">YES Decisions</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-number">${stats.by_decision.NO || 0}</div>
+            <div class="stat-label">NO Decisions</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-number">${stats.avg_confidence.toFixed(1)}%</div>
+            <div class="stat-label">Avg Confidence</div>
+        </div>
+    `;
+}
+
+function onRemoveCurated(marketId) {
+    try {
+        if (!window.Curations) {
+            showToast('Curations system not available', 'error');
+            return;
+        }
+        
+        window.Curations.removeCurations([marketId]);
+        onCurated(); // Refresh the view
+        showToast('Market removed from curated list', 'success');
+    } catch (err) {
+        showToast(`Failed to remove market: ${err.message}`, 'error');
+    }
 }
 
 // Backtest data loading
@@ -755,6 +879,74 @@ document.addEventListener('DOMContentLoaded', function() {
                 } catch (error) {
                     console.error('Backtest tab error:', error);
                     showToast('Error switching to backtest', 'error');
+                }
+            });
+        }
+
+        const btnCurated = document.getElementById('btnCurated');
+        if (btnCurated) {
+            btnCurated.addEventListener('click', () => {
+                try {
+                    showTab('curated');
+                    onCurated();
+                } catch (error) {
+                    console.error('Curated tab error:', error);
+                    showToast('Error switching to curated', 'error');
+                }
+            });
+        }
+
+        // Curated page event handlers
+        const btnExportCurated = document.getElementById('btnExportCurated');
+        const btnClearCurated = document.getElementById('btnClearCurated');
+        const curatedSearch = document.getElementById('curatedSearch');
+        const curatedFilter = document.getElementById('curatedFilter');
+        
+        if (btnExportCurated) {
+            btnExportCurated.addEventListener('click', () => {
+                try {
+                    if (window.Curations) {
+                        window.Curations.exportCurationsJSON();
+                        showToast('Curated markets exported', 'success');
+                    } else {
+                        showToast('Curations system not available', 'error');
+                    }
+                } catch (err) {
+                    showToast(`Export failed: ${err.message}`, 'error');
+                }
+            });
+        }
+        
+        if (btnClearCurated) {
+            btnClearCurated.addEventListener('click', () => {
+                try {
+                    if (confirm('Are you sure you want to clear all curated markets? This cannot be undone.')) {
+                        if (window.Curations) {
+                            window.Curations.clearAllCurations();
+                            onCurated(); // Refresh the view
+                            showToast('All curated markets cleared', 'success');
+                        } else {
+                            showToast('Curations system not available', 'error');
+                        }
+                    }
+                } catch (err) {
+                    showToast(`Clear failed: ${err.message}`, 'error');
+                }
+            });
+        }
+        
+        if (curatedSearch) {
+            curatedSearch.addEventListener('input', () => {
+                if (currentTab === 'curated') {
+                    renderCurated();
+                }
+            });
+        }
+        
+        if (curatedFilter) {
+            curatedFilter.addEventListener('change', () => {
+                if (currentTab === 'curated') {
+                    renderCurated();
                 }
             });
         }

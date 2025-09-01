@@ -25,6 +25,7 @@
       <button id="btnUpcoming" class="tab-btn">🗓️ Upcoming</button>
       <button id="btnCategories" class="tab-btn">🏷️ Categories</button>
       <button id="btnBacktest" class="tab-btn">🧪 Backtest</button>
+      <button id="btnCurated" class="tab-btn">⭐ Curated</button>
     </div>
     <div id="loadingIndicator" class="hidden">
       <div class="spinner"></div>
@@ -142,6 +143,34 @@
     </div>
   </section>
 
+  <!-- Curated Section -->
+  <section id="curatedSec" class="tab-content hidden">
+    <h2>⭐ Curated Markets</h2>
+    
+    <div class="form-row" style="gap:12px; align-items:flex-end; margin-bottom:10px">
+      <div class="form-group">
+        <label for="curatedSearch">Search</label>
+        <input id="curatedSearch" type="text" placeholder="Search curated markets..."/>
+      </div>
+      <div class="form-group">
+        <label for="curatedFilter">Filter by Decision</label>
+        <select id="curatedFilter">
+          <option value="">All</option>
+          <option value="YES">YES</option>
+          <option value="NO">NO</option>
+          <option value="SKIP">SKIP</option>
+        </select>
+      </div>
+      <button id="btnExportCurated" class="btn-secondary">📥 Export JSON</button>
+      <button id="btnClearCurated" class="btn-secondary">🗑️ Clear All</button>
+    </div>
+    
+    <div id="curatedStats" class="stats-row"></div>
+    <div id="curatedList">
+      <div class="no-data">No curated markets yet</div>
+    </div>
+  </section>
+
   <!-- Backtest Section -->
   <section id="backtestSec" class="tab-content hidden">
     <h2>🧪 Backtesting</h2>
@@ -213,6 +242,8 @@
     </div>
   </div>
 
+  <!-- Curations helper (stateless localStorage store) -->
+  <script src="lib/curations.js" defer></script>
   <!-- Cache-bust the app script to avoid stale 8000 base URL in caches -->
   <script src="app.js?v=20250901" defer></script>
 </body>
