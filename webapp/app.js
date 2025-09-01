@@ -348,7 +348,7 @@ async function loadAspectsData() {
     const quarterSel = document.getElementById("quarterSel");
     if (quarterSel && quarterSel.value && quarterSel.value !== "Loading...") {
         try {
-            const aspects = await safeFetch(`${BACKEND}/aspects?quarter=${quarterSel.value}`);
+            const aspects = await safeFetch(`${BACKEND}/astrology/aspects?quarter=${quarterSel.value}`);
             renderAspectsTable(aspects);
         } catch (error) {
             showToast(`Failed to load aspects: ${error.message}`, "error");
@@ -385,7 +385,9 @@ async function loadOpportunitiesData() {
     if (!container) return;
 
     try {
-        const opportunities = await safeFetch(`${BACKEND}/opportunities/quarter`);
+        const quarterSel = document.getElementById("quarterSel");
+        const quarter = quarterSel?.value || getCurrentQuarter();
+        const opportunities = await safeFetch(`${BACKEND}/opportunities/quarter?quarter=${encodeURIComponent(quarter)}`);
         renderOpportunities(opportunities);
     } catch (error) {
         container.innerHTML = '<div class="no-data">Failed to load opportunities</div>';
@@ -497,6 +499,13 @@ async function submitBacktest(event) {
     } finally {
         hideLoading();
     }
+}
+
+// Helper functions
+function getCurrentQuarter() {
+    const now = new Date();
+    const quarter = Math.floor(now.getUTCMonth() / 3) + 1;
+    return `${now.getUTCFullYear()}-Q${quarter}`;
 }
 
 // Utility formatting functions

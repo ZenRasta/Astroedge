@@ -134,7 +134,7 @@ class BacktestEngine:
                     "end_date": datetime.utcnow().isoformat(),
                     "metrics": final_metrics
                 },
-                eq={"id": self.test_run_id}
+                filters={"id": self.test_run_id}
             )
             
             logger.info(f"Backtest '{name}' completed. Final equity: ${self.equity:.2f}")
@@ -150,7 +150,7 @@ class BacktestEngine:
                         "status": "failed",
                         "end_date": datetime.utcnow().isoformat()
                     },
-                    eq={"id": self.test_run_id}
+                    filters={"id": self.test_run_id}
                 )
             
             raise
@@ -302,7 +302,7 @@ class BacktestEngine:
                         "execution_price": opp["p0"],  # Simplified
                         "execution_qty": opp["size_fraction"] * self.equity / opp["p0"]
                     },
-                    eq={
+                    filters={
                         "test_run_id": self.test_run_id,
                         "market_id": opp["market_id"],
                         "scan_time": scan_date.isoformat()
@@ -412,7 +412,7 @@ class BacktestEngine:
                 "realized_pnl": pnl,
                 "outcome": 1 if exit_price > 0.5 else 0
             },
-            eq={"id": position["trade_id"]}
+            filters={"id": position["trade_id"]}
         )
         
         # Update equity
@@ -523,7 +523,7 @@ async def stop_backtest(test_run_id: str) -> bool:
                 "status": "stopped",
                 "end_date": datetime.utcnow().isoformat()
             },
-            eq={"id": test_run_id}
+            filters={"id": test_run_id}
         )
         
         logger.info(f"Stopped backtest {test_run_id}")
@@ -540,7 +540,7 @@ async def get_backtest_status(test_run_id: str) -> Optional[Dict[str, Any]]:
         runs = await supabase.select(
             table="test_runs",
             select="*",
-            eq={"id": test_run_id}
+            filters={"id": test_run_id}
         )
         
         return runs[0] if runs else None
