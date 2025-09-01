@@ -543,8 +543,15 @@ async function onAnalyzeMarket(marketId, marketData = null) {
             
             if (window.Curations) {
                 window.Curations.upsertCurations(items);
-                showToast(`Analysis complete: ${items[0].decision} (${Math.round((items[0].confidence || 0) * 100)}% confidence)`, 'success');
-                updateRecentAnalysis(); // Update inline summary
+                showToast(`Analyzed ${items.length} market(s)`, 'success');
+                
+                // 🔔 Force re-render of Recent Analysis section
+                updateRecentAnalysis();
+                
+                // If we're on the curated tab, refresh that too
+                if (currentTab === 'curated') {
+                    onCurated();
+                }
             } else {
                 showToast('Curations system not available', 'error');
             }
@@ -677,107 +684,98 @@ function renderCurated() {
         return;
     }
     
-    // Separate analyzed vs manually curated
-    const analyzed = filtered.filter(c => c.p_model !== null && c.p_model !== undefined);
-    const manual = filtered.filter(c => c.p_model === null || c.p_model === undefined);
+    // Filter for analyzed markets only (those with decision)
+    const analyzedMarkets = filtered.filter(c => !!c.decision);
     
-    let html = '';
+    if (analyzedMarkets.length === 0) {
+        el.innerHTML = '<div class="no-data">No analyzed markets yet. Use "Analyze" button on Upcoming page.</div>';
+        return;
+    }
     
-    if (analyzed.length > 0) {
-        html += `
+    // Map to SummaryRow format
+    const summary = analyzedMarkets.map(r => ({
+        curation_id: r.curation_id,
+        market_id: r.market_id,
+        title: r.title,
+        deadline_utc: r.deadline_utc,
+        decision: r.decision,
+        confidence: r.confidence ?? null
+    }));
+    
+    el.innerHTML = `
         <div class="section-header">
             <h3>Analysis Summary</h3>
-            <p>${analyzed.length} analyzed markets</p>
+            <p>${analyzedMarkets.length} analyzed markets</p>
         </div>
-        ${renderAnalysisSummaryTable(analyzed)}
-        <div style="margin: 24px 0;"></div>
-        `;
-    }
-    
-    if (manual.length > 0) {
-        html += `
-        <div class="section-header">
-            <h3>Manually Curated</h3>
-            <p>${manual.length} manually added markets</p>
-        </div>
-        `;
-        
-        html += manual.map(c => `
-            <div class="card">
-              <div class="card-title">${c.title || 'Untitled Market'}</div>
-              <div class="card-metrics">
-                <div class="metric"><strong>Deadline:</strong> ${formatDateTime(c.deadline_utc)}</div>
-                <div class="metric"><strong>Decision:</strong> <span class="decision-${c.decision?.toLowerCase() || 'unknown'}">${c.decision || 'UNKNOWN'}</span></div>
-                <div class="metric"><strong>Confidence:</strong> ${c.confidence ? `${Math.round(c.confidence * 100)}%` : 'N/A'}</div>
-                <div class="metric"><strong>Created:</strong> ${formatDateTime(c.created_at)}</div>
-              </div>
-              <div>
-                ${(c.tags || []).map(t => `<span class="chip">${t}</span>`).join(' ')}
-              </div>
-              <div style="margin-top:8px;">
-                <button class="btn-secondary" onclick="onRemoveCurated('${c.market_id}')">Remove</button>
-              </div>
-            </div>
-        `).join('');
-    }
-    
-    el.innerHTML = html;
+        ${renderAnalysisSummaryTable(summary)}
+    `;
 }
 
-function renderAnalysisSummaryTable(rows) {
-    if (!rows || rows.length === 0) return '';
+function fmtUTC(iso) {
+    if (!iso) return '—';
+    try { 
+        return new Date(iso).toISOString().replace('.000Z', 'Z'); 
+    } catch { 
+        return iso; 
+    }
+}
+
+function fmtConf(x) {
+    if (x === null || x === undefined || Number.isNaN(x)) return '—';
+    return `${Math.round(x * 100)}%`;
+}
+
+function renderAnalysisSummaryTable(rows, showActions = true) {
+    if (!rows || rows.length === 0) {
+        return `
+            <div class="border rounded-xl overflow-hidden">
+                <table class="w-full text-sm">
+                    <thead class="bg-gray-50 sticky top-0">
+                        <tr class="text-left">
+                            <th class="py-2 px-3">Market</th>
+                            <th class="py-2 px-3">Resolution (UTC)</th>
+                            <th class="py-2 px-3">Decision</th>
+                            <th class="py-2 px-3">Confidence</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr><td class="py-6 px-3 text-gray-500" colspan="4">No analyzed markets yet.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        `;
+    }
     
     // Sort by deadline ascending
-    const sorted = [...rows].sort((a, b) => {
-        const aDate = new Date(a.deadline_utc || 0);
-        const bDate = new Date(b.deadline_utc || 0);
-        return aDate - bDate;
-    });
-    
-    const formatUTC = (iso) => {
-        if (!iso) return '—';
-        try { 
-            return new Date(iso).toISOString().replace('.000Z', 'Z'); 
-        } catch { 
-            return iso; 
-        }
-    };
-    
-    const formatConf = (x) => {
-        if (x === null || x === undefined || Number.isNaN(x)) return '—';
-        return `${Math.round(x * 100)}%`;
-    };
+    const data = [...rows].sort((a, b) => (a.deadline_utc > b.deadline_utc ? 1 : -1));
     
     return `
-        <div class="analysis-summary-table">
-            <table>
-                <thead>
-                    <tr>
-                        <th>Market</th>
-                        <th>Resolution (UTC)</th>
-                        <th>Decision</th>
-                        <th>Confidence</th>
-                        <th>P(Model)</th>
-                        <th>Actions</th>
+        <div class="border rounded-xl overflow-hidden">
+            <table class="w-full text-sm">
+                <thead class="bg-gray-50 sticky top-0">
+                    <tr class="text-left">
+                        <th class="py-2 px-3">Market</th>
+                        <th class="py-2 px-3">Resolution (UTC)</th>
+                        <th class="py-2 px-3">Decision</th>
+                        <th class="py-2 px-3">Confidence</th>
                     </tr>
                 </thead>
                 <tbody>
-                    ${sorted.map(r => `
-                        <tr>
-                            <td class="market-title">${r.title || 'Untitled'}</td>
-                            <td>${formatUTC(r.deadline_utc)}</td>
-                            <td>
+                    ${data.map(r => `
+                        <tr class="border-t">
+                            <td class="py-2 px-3">${r.title || 'Untitled'}</td>
+                            <td class="py-2 px-3">${fmtUTC(r.deadline_utc)}</td>
+                            <td class="py-2 px-3">
                                 ${r.decision ? `
-                                    <span class="decision-badge decision-${r.decision.toLowerCase()}">
+                                    <span class="text-xs rounded px-2 py-0.5 ${
+                                        r.decision === 'YES' ? 'bg-emerald-100' : 
+                                        r.decision === 'NO' ? 'bg-rose-100' : 'bg-amber-100'
+                                    }">
                                         ${r.decision}
                                     </span>
                                 ` : '—'}
                             </td>
-                            <td>${formatConf(r.confidence)}</td>
-                            <td>${r.p_model ? `${Math.round(r.p_model * 100)}%` : '—'}</td>
-                            <td>
-                                <button class="btn-small" onclick="onRemoveCurated('${r.market_id}')">Remove</button>
-                            </td>
+                            <td class="py-2 px-3">${fmtConf(r.confidence)}</td>
                         </tr>
                     `).join('')}
                 </tbody>
@@ -793,18 +791,30 @@ function updateRecentAnalysis() {
     if (!container || !listEl || !window.Curations) return;
     
     const curations = window.Curations.loadCurations();
+    // Filter for analyzed markets (those with decision)
     const analyzed = curations
-        .filter(c => c.p_model !== null && c.p_model !== undefined)
+        .filter(c => !!c.decision)
         .sort((a, b) => new Date(b.updated_at || b.created_at) - new Date(a.updated_at || a.created_at))
-        .slice(0, 5);
+        .slice(0, 5)
+        .reverse(); // Show most recent first
     
     if (analyzed.length === 0) {
         container.classList.add('hidden');
         return;
     }
     
+    // Map to SummaryRow format
+    const recentSummary = analyzed.map(r => ({
+        curation_id: r.curation_id,
+        market_id: r.market_id,
+        title: r.title,
+        deadline_utc: r.deadline_utc,
+        decision: r.decision,
+        confidence: r.confidence ?? null
+    }));
+    
     container.classList.remove('hidden');
-    listEl.innerHTML = renderAnalysisSummaryTable(analyzed);
+    listEl.innerHTML = renderAnalysisSummaryTable(recentSummary);
 }
 
 function updateCuratedStats() {
