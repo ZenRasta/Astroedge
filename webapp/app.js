@@ -445,15 +445,22 @@ function renderOpportunities(opportunities) {
 
 // Upcoming + Categories
 async function onUpcoming(category = null) {
-    const q = normQuarter(document.getElementById('quarterSel')?.value || getCurrentQuarter());
-    const qs = category ? `&category=${encodeURIComponent(category)}` : '';
+    // Use backend API that scans live Gamma markets within X days
+    const days = (document.getElementById('upcomingDaysSel')?.value || '30');
+    const liq = (document.getElementById('upcomingLiqMin')?.value || '0');
+    const params = new URLSearchParams({ days: String(days), liquidity_min: String(liq), limit: '250' });
+    const btn = document.getElementById('btnScanNow');
     try {
-        const res = await api(`/markets/upcoming?quarter=${encodeURIComponent(q)}${qs}`);
-        renderUpcoming(res || []);
+        if (btn) btn.disabled = true;
+        const res = await api(`/api/markets/upcoming?${params.toString()}`);
+        renderUpcoming(res?.markets || []);
+        showToast(`Found ${res?.count ?? 0} markets (fetched ${new Date(res?.now_utc || Date.now()).toLocaleString()})`, 'success');
     } catch (err) {
         showToast(`Failed to load upcoming: ${err.message}`, 'error');
         const el = document.getElementById('upcomingList');
         if (el) el.innerHTML = '<div class="no-data">Failed to load upcoming markets</div>';
+    } finally {
+        if (btn) btn.disabled = false;
     }
 }
 
@@ -493,20 +500,24 @@ function renderUpcoming(list) {
         el.innerHTML = '<div class="no-data">No upcoming markets for this quarter</div>';
         return;
     }
-    el.innerHTML = list.map(m => `
+    el.innerHTML = list.map(m => {
+        const mid = m.price_mid ?? m.price_yes_mid ?? m.price_yes ?? 0;
+        const liq = m.liquidity_num ?? m.liquidity_score ?? 0;
+        const tags = m.tags || m.category_tags || [];
+        return `
         <div class="card">
           <div class="card-title">${m.title}</div>
           <div class="card-metrics">
             <div class="metric"><strong>Deadline:</strong> ${formatDateTime(m.deadline_utc)}</div>
-            <div class="metric"><strong>p0:</strong> ${formatPrice(m.price_yes_mid)}</div>
-            <div class="metric"><strong>Liquidity:</strong> ${formatDecimal(m.liquidity_score ?? 0, 2)}</div>
+            <div class="metric"><strong>p0:</strong> ${formatPrice(mid)}</div>
+            <div class="metric"><strong>Liquidity:</strong> ${formatDecimal(liq, 2)}</div>
           </div>
           <div>
-            ${(m.tags||[]).map(t => `<span class="chip">${t}</span>`).join(' ')}
+            ${tags.map(t => `<span class="chip">${t}</span>`).join(' ')}
           </div>
           <div style="margin-top:8px"><button class="btn-primary" onclick="onAnalyzeMarket('${m.id}')">Analyze</button></div>
         </div>
-    `).join('');
+    `; }).join('');
 }
 
 function renderCategories(map) {
@@ -680,6 +691,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const btnAspects = document.getElementById('btnAspects');
         const btnOpps = document.getElementById('btnOpps');
         const btnUpcoming = document.getElementById('btnUpcoming');
+        const btnScanNow = document.getElementById('btnScanNow');
         const btnCategories = document.getElementById('btnCategories');
         const btnBacktest = document.getElementById('btnBacktest');
         const backtestForm = document.getElementById('backtestForm');
@@ -721,6 +733,12 @@ document.addEventListener('DOMContentLoaded', function() {
         if (btnUpcoming) {
             btnUpcoming.addEventListener('click', () => {
                 try { showTab('upcoming'); } catch (e) { console.error(e); }
+            });
+        }
+
+        if (btnScanNow) {
+            btnScanNow.addEventListener('click', () => {
+                try { onUpcoming(); } catch (e) { console.error(e); }
             });
         }
 

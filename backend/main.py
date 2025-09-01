@@ -72,6 +72,7 @@ app.include_router(opportunities.router)
 app.include_router(trading.router)
 app.include_router(analytics.router)
 app.include_router(markets.router)
+app.include_router(markets.api_router, prefix="/api")
 
 # Mount static files for Mini-App
 webapp_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "webapp")

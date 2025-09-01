@@ -340,8 +340,26 @@ create index if not exists idx_test_opps_run_scan on test_opportunities (test_ru
 create index if not exists idx_test_opps_executed on test_opportunities (test_run_id, executed);
 
 -- =========
+-- Markets Cache (Gamma scan snapshots)
+-- =========
+create table if not exists markets_cache (
+  id text primary key,
+  title text not null,
+  deadline_utc timestamptz not null,
+  liquidity_num double precision,
+  price_mid double precision,
+  best_bid double precision,
+  best_ask double precision,
+  last_trade_price double precision,
+  tags jsonb,
+  category text,
+  fetched_at timestamptz not null default now()
+);
+create index if not exists idx_mcache_deadline on markets_cache (deadline_utc);
+create index if not exists idx_mcache_fetched on markets_cache (fetched_at desc);
+
+-- =========
 -- RLS (optional; keep disabled for service role usage)  
 -- =========
 -- alter table <name> enable row level security;
 -- (Add policies later if exposing anon client directly)
-

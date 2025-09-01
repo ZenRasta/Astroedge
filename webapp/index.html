@@ -112,6 +112,23 @@
   <!-- Upcoming Section -->
   <section id="upcomingSec" class="tab-content hidden">
     <h2>🗓️ Upcoming Markets</h2>
+    <div class="form-row" style="gap:12px; align-items:flex-end; margin-bottom:10px">
+      <div class="form-group">
+        <label for="upcomingDaysSel">Days Ahead</label>
+        <select id="upcomingDaysSel">
+          <option value="7">7</option>
+          <option value="14">14</option>
+          <option value="30" selected>30</option>
+          <option value="60">60</option>
+          <option value="90">90</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="upcomingLiqMin">Min Liquidity</label>
+        <input id="upcomingLiqMin" type="number" value="0" min="0" step="100"/>
+      </div>
+      <button id="btnScanNow" class="btn-primary">🔄 Scan Now</button>
+    </div>
     <div id="upcomingList">
       <div class="no-data">Select a quarter to view upcoming markets</div>
     </div>

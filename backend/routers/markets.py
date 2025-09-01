@@ -14,6 +14,8 @@ try:
     )
     from ..polymarket_client import normalize_markets_for_quarter
     from ..services.supabase_repo_markets import upsert_markets
+    from ..services.gamma import fetch_upcoming_markets, iso_z, now_utc
+    from ..db.supa import upsert_markets_cache
 except ImportError:  # pragma: no cover - local run convenience
     import sys
     import os
@@ -25,11 +27,14 @@ except ImportError:  # pragma: no cover - local run convenience
     )
     from polymarket_client import normalize_markets_for_quarter
     from services.supabase_repo_markets import upsert_markets
+    from services.gamma import fetch_upcoming_markets, iso_z, now_utc
+    from db.supa import upsert_markets_cache
 
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["markets"])
+api_router = APIRouter(tags=["markets"])  # to be mounted at prefix /api in main
 
 
 def _parse_ts(ts: Optional[str]) -> Optional[datetime]:
@@ -117,6 +122,53 @@ async def upcoming(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@api_router.get("/markets/upcoming")
+async def api_upcoming(
+    days: int = Query(30, ge=1, le=180),
+    liquidity_min: float = Query(0, ge=0),
+    limit: int = Query(250, ge=1, le=500),
+):
+    """Fetch open Polymarket markets resolving within `days` (default 30).
+
+    - Uses Gamma `end_date_min`/`end_date_max` and `closed=false`
+    - Normalizes price fields (bestBid/bestAsk/lastTradePrice) into 0–1
+    - Upserts into `markets_cache` in Supabase
+    - Returns minimal payload ready for UI
+    """
+    try:
+        markets = await fetch_upcoming_markets(days=days, liquidity_min=liquidity_min, limit=limit)
+
+        fetched_at = iso_z(now_utc())
+        cache_rows = [
+            {
+                "id": m["id"],
+                "title": m["title"],
+                "deadline_utc": m["deadline_utc"],
+                "liquidity_num": m.get("liquidity_num"),
+                "price_mid": m.get("price_mid"),
+                "best_bid": m.get("best_bid"),
+                "best_ask": m.get("best_ask"),
+                "last_trade_price": m.get("last_trade_price"),
+                "tags": m.get("tags") or [],
+                "category": m.get("category"),
+                "fetched_at": fetched_at,
+            }
+            for m in markets
+        ]
+        await upsert_markets_cache(cache_rows)
+
+        return {
+            "now_utc": fetched_at,
+            "count": len(markets),
+            "markets": markets,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"API upcoming failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/markets/categories")
 async def categories(
     quarter: str = Query(...),
@@ -179,12 +231,22 @@ async def analyze_now(body: Dict[str, Any]) -> List[Dict[str, Any]]:
         # Fetch market snapshots
         results: List[Dict[str, Any]] = []
         for mid in market_ids:
+            # Prefer canonical markets; fallback to markets_cache (from /api scan)
             rows = await supabase.select(
                 table="markets",
                 select="id,title,deadline_utc,price_yes,category_tags",
                 eq={"id": mid},
                 limit=1,
             )
+            market_from_cache = False
+            if not rows:
+                rows = await supabase.select(
+                    table="markets_cache",
+                    select="id,title,deadline_utc,price_mid as price_yes,tags as category_tags",
+                    eq={"id": mid},
+                    limit=1,
+                )
+                market_from_cache = True if rows else False
             if not rows:
                 continue
 
@@ -212,7 +274,7 @@ async def analyze_now(body: Dict[str, Any]) -> List[Dict[str, Any]]:
                     "market_id": mid,
                     "title": m.get("title"),
                     "deadline_utc": m.get("deadline_utc"),
-                    "tags": m.get("category_tags") or [],
+                    "tags": (m.get("category_tags") or []),
                     "p0": p0,
                     "s_astro": s_astro,
                     "p_astro": p_astro,

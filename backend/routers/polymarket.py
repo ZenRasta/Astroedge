@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, Query
 try:
     from ..config import settings
     from ..schemas import MarketNormalized, TaggerIn, TaggerOut
-from ..polymarket_client import normalize_markets_for_quarter, normalize_live_markets
+    from ..polymarket_client import normalize_markets_for_quarter, normalize_live_markets
     from ..services.llm_tagger import tag_markets_batch
     from ..services.supabase_repo_markets import upsert_markets
 except ImportError:
