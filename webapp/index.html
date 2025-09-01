@@ -7,8 +7,8 @@
   <link rel="stylesheet" href="styles.css"/>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <script>
-    // Set backend URL for API calls
-    window.BACKEND_BASE_URL = window.BACKEND_BASE_URL || "http://localhost:8003";
+    // Set backend URL for API calls to same origin by default
+    window.BACKEND_BASE_URL = window.BACKEND_BASE_URL || window.location.origin;
   </script>
 </head>
 <body>
@@ -22,6 +22,8 @@
       <button id="btnDashboard" class="tab-btn">📊 Dashboard</button>
       <button id="btnAspects" class="tab-btn">🌟 Aspects</button>
       <button id="btnOpps" class="tab-btn">📈 Opportunities</button>
+      <button id="btnUpcoming" class="tab-btn">🗓️ Upcoming</button>
+      <button id="btnCategories" class="tab-btn">🏷️ Categories</button>
       <button id="btnBacktest" class="tab-btn">🧪 Backtest</button>
     </div>
     <div id="loadingIndicator" class="hidden">
@@ -107,6 +109,22 @@
     </div>
   </section>
 
+  <!-- Upcoming Section -->
+  <section id="upcomingSec" class="tab-content hidden">
+    <h2>🗓️ Upcoming Markets</h2>
+    <div id="upcomingList">
+      <div class="no-data">Select a quarter to view upcoming markets</div>
+    </div>
+  </section>
+
+  <!-- Categories Section -->
+  <section id="categoriesSec" class="tab-content hidden">
+    <h2>🏷️ Categories</h2>
+    <div id="categoriesGrid" class="kpi-grid">
+      <div class="no-data">Select a quarter to view categories</div>
+    </div>
+  </section>
+
   <!-- Backtest Section -->
   <section id="backtestSec" class="tab-content hidden">
     <h2>🧪 Backtesting</h2>
@@ -178,6 +196,7 @@
     </div>
   </div>
 
-  <script src="app.js" defer></script>
+  <!-- Cache-bust the app script to avoid stale 8000 base URL in caches -->
+  <script src="app.js?v=20250901" defer></script>
 </body>
 </html>

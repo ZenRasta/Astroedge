@@ -4,7 +4,8 @@
  */
 
 // Configuration
-const BACKEND = window.BACKEND_BASE_URL || "http://localhost:8003";
+const BACKEND = window.BACKEND_BASE_URL || window.location.origin;
+console.log('[AstroEdge] BACKEND base =', BACKEND);
 const API_TIMEOUT = 10000; // 10 second timeout
 
 // Global state
@@ -100,6 +101,21 @@ async function safeFetch(url, options = {}) {
     }
 }
 
+// Centralized API helper (path relative to BACKEND)
+async function api(path, opts = {}) {
+    const url = `${BACKEND}${path}`;
+    return safeFetch(url, {
+        method: opts.method || 'GET',
+        body: opts.body,
+        headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
+    });
+}
+
+// Normalize quarter values (handles "2024 Q3" -> "2024-Q3")
+function normQuarter(q) {
+    return (q || '').trim().replace(/\s+/g, '-').toUpperCase();
+}
+
 // Loading indicator management
 function showLoading() {
     isLoading = true;
@@ -169,6 +185,12 @@ async function loadTabData(tabName) {
                 break;
             case "backtest":
                 await loadBacktestData();
+                break;
+            case "upcoming":
+                await onUpcoming();
+                break;
+            case "categories":
+                await onCategories();
                 break;
         }
     } catch (error) {
@@ -348,7 +370,9 @@ async function loadAspectsData() {
     const quarterSel = document.getElementById("quarterSel");
     if (quarterSel && quarterSel.value && quarterSel.value !== "Loading...") {
         try {
-            const aspects = await safeFetch(`${BACKEND}/astrology/aspects?quarter=${quarterSel.value}`);
+            const q = normQuarter(quarterSel.value);
+            const resp = await api(`/astrology/aspects?quarter=${encodeURIComponent(q)}`);
+            const aspects = resp?.aspects || [];
             renderAspectsTable(aspects);
         } catch (error) {
             showToast(`Failed to load aspects: ${error.message}`, "error");
@@ -365,14 +389,14 @@ function renderAspectsTable(aspects) {
         return;
     }
 
-    const rowsHtml = aspects.map(aspect => `
+    const rowsHtml = (aspects || []).map(aspect => `
         <tr>
             <td>${formatDateTime(aspect.peak_utc)}</td>
-            <td>${aspect.pair}</td>
+            <td>${aspect.planet1}-${aspect.planet2}</td>
             <td>${aspect.aspect}</td>
-            <td>${formatDecimal(aspect.orb, 2)}°</td>
+            <td>${formatDecimal(aspect.orb_deg ?? aspect.orb ?? 0, 2)}°</td>
             <td>${aspect.severity}</td>
-            <td>${aspect.eclipse ? 'Yes' : 'No'}</td>
+            <td>${aspect.is_eclipse ? 'Yes' : 'No'}</td>
         </tr>
     `).join('');
 
@@ -386,8 +410,8 @@ async function loadOpportunitiesData() {
 
     try {
         const quarterSel = document.getElementById("quarterSel");
-        const quarter = quarterSel?.value || getCurrentQuarter();
-        const opportunities = await safeFetch(`${BACKEND}/opportunities/quarter?quarter=${encodeURIComponent(quarter)}`);
+        const quarter = normQuarter(quarterSel?.value || getCurrentQuarter());
+        const opportunities = await api(`/opportunities/quarter?quarter=${encodeURIComponent(quarter)}`);
         renderOpportunities(opportunities);
     } catch (error) {
         container.innerHTML = '<div class="no-data">Failed to load opportunities</div>';
@@ -417,6 +441,98 @@ function renderOpportunities(opportunities) {
     `).join('');
 
     container.innerHTML = oppsHtml;
+}
+
+// Upcoming + Categories
+async function onUpcoming(category = null) {
+    const q = normQuarter(document.getElementById('quarterSel')?.value || getCurrentQuarter());
+    const qs = category ? `&category=${encodeURIComponent(category)}` : '';
+    try {
+        const res = await api(`/markets/upcoming?quarter=${encodeURIComponent(q)}${qs}`);
+        renderUpcoming(res || []);
+    } catch (err) {
+        showToast(`Failed to load upcoming: ${err.message}`, 'error');
+        const el = document.getElementById('upcomingList');
+        if (el) el.innerHTML = '<div class="no-data">Failed to load upcoming markets</div>';
+    }
+}
+
+async function onCategories() {
+    const q = normQuarter(document.getElementById('quarterSel')?.value || getCurrentQuarter());
+    try {
+        const res = await api(`/markets/categories?quarter=${encodeURIComponent(q)}`);
+        renderCategories(res || {});
+    } catch (err) {
+        showToast(`Failed to load categories: ${err.message}`, 'error');
+        const el = document.getElementById('categoriesGrid');
+        if (el) el.innerHTML = '<div class="no-data">Failed to load categories</div>';
+    }
+}
+
+async function onAnalyzeMarket(marketId) {
+    const q = normQuarter(document.getElementById('quarterSel')?.value || getCurrentQuarter());
+    const payload = {
+        quarter: q,
+        market_ids: [marketId],
+        params: { lambda_gain:0.10, threshold:0.04, lambda_days:5,
+                  orb_limits:{square:8,opposition:8,conjunction:6}, K_cap:5,
+                  fees_bps:60, slippage:0.005, size_cap:0.05 }
+    };
+    try {
+        const out = await api(`/markets/analyze`, { method: 'POST', body: JSON.stringify(payload) });
+        renderAnalysis(out || []);
+    } catch (err) {
+        showToast(`Analyze failed: ${err.message}`, 'error');
+    }
+}
+
+function renderUpcoming(list) {
+    const el = document.getElementById('upcomingList');
+    if (!el) return;
+    if (!list || list.length === 0) {
+        el.innerHTML = '<div class="no-data">No upcoming markets for this quarter</div>';
+        return;
+    }
+    el.innerHTML = list.map(m => `
+        <div class="card">
+          <div class="card-title">${m.title}</div>
+          <div class="card-metrics">
+            <div class="metric"><strong>Deadline:</strong> ${formatDateTime(m.deadline_utc)}</div>
+            <div class="metric"><strong>p0:</strong> ${formatPrice(m.price_yes_mid)}</div>
+            <div class="metric"><strong>Liquidity:</strong> ${formatDecimal(m.liquidity_score ?? 0, 2)}</div>
+          </div>
+          <div>
+            ${(m.tags||[]).map(t => `<span class="chip">${t}</span>`).join(' ')}
+          </div>
+          <div style="margin-top:8px"><button class="btn-primary" onclick="onAnalyzeMarket('${m.id}')">Analyze</button></div>
+        </div>
+    `).join('');
+}
+
+function renderCategories(map) {
+    const el = document.getElementById('categoriesGrid');
+    if (!el) return;
+    const entries = Object.entries(map || {});
+    if (entries.length === 0) {
+        el.innerHTML = '<div class="no-data">No categories in this quarter</div>';
+        return;
+    }
+    el.innerHTML = entries.map(([k, v]) => `
+        <div class="kpi-item chip" style="cursor:pointer" onclick="AstroEdge.onCategoryClick('${k}')">
+          <div class="kpi-value">${v}</div>
+          <div class="kpi-label">${k}</div>
+        </div>
+    `).join('');
+}
+
+function renderAnalysis(out) {
+    if (!out || out.length === 0) {
+        showToast('No analysis produced', 'info');
+        return;
+    }
+    const r = out[0];
+    const pct = (x)=> `${(x*100).toFixed(1)}%`;
+    showToast(`p0 ${pct(r.p0)} → p_astro ${pct(r.p_astro)} | edge ${pct(r.edge_net)} | ${r.decision}`,'success');
 }
 
 // Backtest data loading
@@ -563,6 +679,8 @@ document.addEventListener('DOMContentLoaded', function() {
         const btnDashboard = document.getElementById('btnDashboard');
         const btnAspects = document.getElementById('btnAspects');
         const btnOpps = document.getElementById('btnOpps');
+        const btnUpcoming = document.getElementById('btnUpcoming');
+        const btnCategories = document.getElementById('btnCategories');
         const btnBacktest = document.getElementById('btnBacktest');
         const backtestForm = document.getElementById('backtestForm');
 
@@ -597,6 +715,18 @@ document.addEventListener('DOMContentLoaded', function() {
                     console.error('Opportunities tab error:', error);
                     showToast('Error switching to opportunities', 'error');
                 }
+            });
+        }
+
+        if (btnUpcoming) {
+            btnUpcoming.addEventListener('click', () => {
+                try { showTab('upcoming'); } catch (e) { console.error(e); }
+            });
+        }
+
+        if (btnCategories) {
+            btnCategories.addEventListener('click', () => {
+                try { showTab('categories'); } catch (e) { console.error(e); }
             });
         }
 
@@ -690,6 +820,9 @@ window.AstroEdge = {
     loadTabData,
     showToast,
     safeFetch,
+    api,
+    normQuarter,
     dashboardData,
-    currentTab
+    currentTab,
+    onCategoryClick: (cat) => onUpcoming(cat)
 };

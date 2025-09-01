@@ -9,12 +9,12 @@ import os
 try:
     from .config import settings
     from .supabase_client import supabase
-    from .routers import astrology, impact_map, polymarket, opportunities, trading, analytics
+    from .routers import astrology, impact_map, polymarket, opportunities, trading, analytics, markets
     from .services.astrology import get_engine
 except ImportError:
     from config import settings
     from supabase_client import supabase
-    from routers import astrology, impact_map, polymarket, opportunities, trading, analytics
+    from routers import astrology, impact_map, polymarket, opportunities, trading, analytics, markets
     from services.astrology import get_engine
 
 logger = logging.getLogger(__name__)
@@ -71,6 +71,7 @@ app.include_router(polymarket.router)
 app.include_router(opportunities.router)
 app.include_router(trading.router)
 app.include_router(analytics.router)
+app.include_router(markets.router)
 
 # Mount static files for Mini-App
 webapp_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "webapp")

@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, Query
 try:
     from ..config import settings
     from ..schemas import MarketNormalized, TaggerIn, TaggerOut
-    from ..polymarket_client import normalize_markets_for_quarter
+from ..polymarket_client import normalize_markets_for_quarter, normalize_live_markets
     from ..services.llm_tagger import tag_markets_batch
     from ..services.supabase_repo_markets import upsert_markets
 except ImportError:
@@ -70,6 +70,22 @@ async def get_markets(quarter: str = Query(..., description="Quarter in format Y
         
     except Exception as e:
         logger.error(f"Market scan failed for quarter {quarter}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/polymarket/markets/live", response_model=List[MarketNormalized])
+async def get_live_markets():
+    """Scan Polymarket for all live markets (deadline in the future)."""
+    try:
+        markets = await normalize_live_markets()
+        if markets:
+            await upsert_markets(markets)
+        # Apply liquidity filter
+        from ..config import settings as _settings
+        liq = float(_settings.liquidity_min_score)
+        return [m for m in markets if m.liquidity_score >= liq]
+    except Exception as e:
+        logger.error(f"Live market scan failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

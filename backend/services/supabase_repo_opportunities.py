@@ -20,11 +20,15 @@ logger = logging.getLogger(__name__)
 async def fetch_opportunities_for_quarter(quarter: str, limit: int = 50) -> List[Dict[str, Any]]:
     """Fetch opportunities for a quarter with market details."""
     try:
-        # Fetch opportunities first
+        # Translate quarter to datetime range using created_at (no quarter column in DB)
+        start_dt, end_dt = parse_quarter(quarter)
+        start_iso = start_dt.isoformat()
+        end_iso = end_dt.isoformat()
+
         opportunities = await supabase.select(
             table="opportunities",
             select="id,market_id,p0,s_astro,p_astro,edge_net,size_fraction,decision,created_at",
-            filters={"quarter": quarter}
+            where=[("created_at", "gte", start_iso), ("created_at", "lt", end_iso)]
         )
         
         if not opportunities:

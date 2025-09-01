@@ -6,7 +6,7 @@ from typing import Tuple
 
 
 def parse_quarter(quarter: str) -> Tuple[datetime, datetime]:
-    """Parse quarter string like 'YYYY-Q1' into UTC datetime range.
+    """Parse quarter string like 'YYYY-Q1' (and tolerate 'YYYY Q1') into UTC datetime range.
     
     Args:
         quarter: Quarter string in format "YYYY-Q1", "YYYY-Q2", "YYYY-Q3", or "YYYY-Q4"
@@ -26,9 +26,10 @@ def parse_quarter(quarter: str) -> Tuple[datetime, datetime]:
         parse_quarter("2025-Q3") -> (2025-07-01 00:00:00+00:00, 2025-10-01 00:00:00+00:00)
         parse_quarter("2024-Q1") -> (2024-01-01 00:00:00+00:00, 2024-04-01 00:00:00+00:00)
     """
-    # Validate and parse quarter string
+    # Normalize and validate quarter string
+    q = (quarter or "").strip().replace(" ", "-").upper()
     pattern = r'^(\d{4})-Q([1-4])$'
-    match = re.match(pattern, quarter)
+    match = re.match(pattern, q)
     
     if not match:
         raise ValueError(f"Invalid quarter format: {quarter}. Expected format: YYYY-Q[1-4]")

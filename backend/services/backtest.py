@@ -5,6 +5,7 @@ from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime, timedelta
 import asyncio
 import uuid
+from datetime import timezone
 
 try:
     from ..supabase_client import supabase
@@ -127,14 +128,17 @@ class BacktestEngine:
             final_metrics = await self._calculate_final_metrics()
             
             # Update test run with completion
+            def _now_iso():
+                return datetime.now(timezone.utc).isoformat()
+
             await supabase.update(
                 table="test_runs",
                 data={
                     "status": "completed",
-                    "end_date": datetime.utcnow().isoformat(),
+                    "end_date": _now_iso(),
                     "metrics": final_metrics
                 },
-                filters={"id": self.test_run_id}
+                eq={"id": self.test_run_id}
             )
             
             logger.info(f"Backtest '{name}' completed. Final equity: ${self.equity:.2f}")
@@ -148,9 +152,9 @@ class BacktestEngine:
                     table="test_runs",
                     data={
                         "status": "failed",
-                        "end_date": datetime.utcnow().isoformat()
+                        "end_date": _now_iso()
                     },
-                    filters={"id": self.test_run_id}
+                    eq={"id": self.test_run_id}
                 )
             
             raise
@@ -302,7 +306,7 @@ class BacktestEngine:
                         "execution_price": opp["p0"],  # Simplified
                         "execution_qty": opp["size_fraction"] * self.equity / opp["p0"]
                     },
-                    filters={
+                    eq={
                         "test_run_id": self.test_run_id,
                         "market_id": opp["market_id"],
                         "scan_time": scan_date.isoformat()
@@ -521,9 +525,9 @@ async def stop_backtest(test_run_id: str) -> bool:
             table="test_runs",
             data={
                 "status": "stopped",
-                "end_date": datetime.utcnow().isoformat()
+                "end_date": datetime.now(timezone.utc).isoformat()
             },
-            filters={"id": test_run_id}
+            eq={"id": test_run_id}
         )
         
         logger.info(f"Stopped backtest {test_run_id}")
@@ -540,7 +544,7 @@ async def get_backtest_status(test_run_id: str) -> Optional[Dict[str, Any]]:
         runs = await supabase.select(
             table="test_runs",
             select="*",
-            filters={"id": test_run_id}
+            eq={"id": test_run_id}
         )
         
         return runs[0] if runs else None

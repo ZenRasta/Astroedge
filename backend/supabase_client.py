@@ -1,4 +1,5 @@
 import httpx
+from urllib.parse import quote
 from typing import Dict, Any, List, Optional
 
 try:
@@ -8,12 +9,18 @@ except ImportError:
 
 
 class SupabaseClient:
-    """Minimal Supabase client wrapper using httpx for PostgREST API calls."""
+    """Minimal Supabase client wrapper using httpx for PostgREST API calls.
+
+    Notes:
+    - Accepts both `filters` and legacy `eq` keyword arguments for convenience.
+    - Adds simple support for `is_null` filters on select.
+    """
 
     def __init__(self):
         self.base_url = f"{settings.supabase_url}/rest/v1"
+        # Use service role for both Authorization and apikey in server-side context
         self.headers = {
-            "apikey": settings.supabase_anon,
+            "apikey": settings.supabase_service_role or settings.supabase_anon,
             "Authorization": f"Bearer {settings.supabase_service_role}",
             "Content-Type": "application/json",
             "Prefer": "return=minimal",
@@ -38,13 +45,37 @@ class SupabaseClient:
         select: str = "*",
         filters: Optional[Dict[str, Any]] = None,
         limit: Optional[int] = None,
+        # Backward-compat/ergonomics
+        eq: Optional[Dict[str, Any]] = None,
+        is_null: Optional[Dict[str, bool]] = None,
+        where: Optional[list] = None,  # list of tuples: (column, op, value) with op in {eq,gt,gte,lt,lte,like,ilike}
     ) -> List[Dict[str, Any]]:
         """Select data from a table."""
         url = f"{self.base_url}/{table}?select={select}"
 
+        # Support both `filters` and legacy `eq` kwargs
+        merged_filters: Dict[str, Any] = {}
         if filters:
-            for key, value in filters.items():
-                url += f"&{key}=eq.{value}"
+            merged_filters.update(filters)
+        if eq:
+            merged_filters.update(eq)
+
+        if merged_filters:
+            for key, value in merged_filters.items():
+                url += f"&{key}=eq.{quote(str(value), safe='')}"
+
+        # Handle IS NULL / NOT IS NULL filters
+        if is_null:
+            for key, flag in is_null.items():
+                url += f"&{key}={'is.null' if flag else 'not.is.null'}"
+        
+        # Handle explicit where operator tuples
+        if where:
+            for cond in where:
+                if not isinstance(cond, (list, tuple)) or len(cond) != 3:
+                    continue
+                col, op, val = cond
+                url += f"&{col}={op}.{quote(str(val), safe='')}"
 
         if limit:
             url += f"&limit={limit}"
@@ -65,13 +96,24 @@ class SupabaseClient:
             return response.json()
 
     async def update(
-        self, table: str, data: Dict[str, Any], filters: Dict[str, Any]
+        self,
+        table: str,
+        data: Dict[str, Any],
+        filters: Optional[Dict[str, Any]] = None,
+        # Backward-compat alias: allow callers to pass eq={...}
+        eq: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Update data in a table."""
         url = f"{self.base_url}/{table}"
 
-        for key, value in filters.items():
-            url += f"?{key}=eq.{value}"
+        merged_filters: Dict[str, Any] = {}
+        if filters:
+            merged_filters.update(filters)
+        if eq:
+            merged_filters.update(eq)
+
+        for key, value in merged_filters.items():
+            url += f"?{key}=eq.{quote(str(value), safe='')}"
 
         headers = {**self.headers, "Prefer": "return=representation"}
 

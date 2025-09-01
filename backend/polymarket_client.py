@@ -24,8 +24,24 @@ logger = logging.getLogger(__name__)
 
 
 async def _get_redis():
-    """Get Redis connection."""
-    return await redis.from_url(settings.redis_url, encoding="utf-8", decode_responses=True)
+    """Get Redis connection.
+
+    Returns a connected client when possible; if Redis is unavailable
+    (common in local dev outside docker-compose), return a tiny stub with
+    no-op get/setex so callers can proceed without caching.
+    """
+    try:
+        return await redis.from_url(
+            settings.redis_url, encoding="utf-8", decode_responses=True
+        )
+    except Exception:
+        class _NoRedis:
+            async def get(self, key):
+                return None
+            async def setex(self, key, ttl, value):
+                return True
+        logger.warning("Redis unavailable; proceeding without cache")
+        return _NoRedis()
 
 
 async def _fetch_markets_page(next_cursor: Optional[str] = None, limit: int = 200) -> Dict[str, Any]:
@@ -161,7 +177,10 @@ async def get_books_batch(token_ids: List[str]) -> Dict[str, OrderbookL1]:
     # Check Redis cache first
     for token_id in token_ids:
         cache_key = f"pm:ob:{token_id}"
-        cached = await redis.get(cache_key)
+        try:
+            cached = await redis.get(cache_key)
+        except Exception:
+            cached = None
         if cached:
             try:
                 fresh[token_id] = OrderbookL1(**json.loads(cached))
@@ -190,11 +209,14 @@ async def get_books_batch(token_ids: List[str]) -> Dict[str, OrderbookL1]:
                 l1 = _l1_from_book(book or {})
                 
                 # Cache in Redis
-                await redis.setex(
-                    f"pm:ob:{token_id}", 
-                    int(settings.orderbook_cache_ttl_sec), 
-                    json.dumps(l1.dict())
-                )
+                try:
+                    await redis.setex(
+                        f"pm:ob:{token_id}", 
+                        int(settings.orderbook_cache_ttl_sec), 
+                        json.dumps(l1.dict())
+                    )
+                except Exception:
+                    pass
                 
                 fresh[token_id] = l1
                 
@@ -308,4 +330,67 @@ async def normalize_markets_for_quarter(quarter: str) -> List[MarketNormalized]:
     
     logger.info(f"Normalized {len(normalized_markets)} markets with liquidity metrics")
     
+    return normalized_markets
+
+
+async def normalize_live_markets() -> List[MarketNormalized]:
+    """Normalize all live (unresolved) markets regardless of quarter.
+
+    Live = deadline_utc > now (UTC). Uses the same pricing/liquidity pipeline
+    as the quarter-based variant.
+    """
+    logger.info("Starting market normalization for all live markets")
+    now = datetime.utcnow().replace(tzinfo=None)
+
+    gamma_markets = []
+    async for market_data in iter_gamma_markets():
+        try:
+            market = _normalize_market(market_data)
+            # Keep markets whose deadline is in the future
+            if market.deadline_utc.replace(tzinfo=None) > now:
+                gamma_markets.append(market)
+        except Exception as e:
+            logger.warning(f"Failed to normalize market {market_data.get('id')}: {e}")
+            continue
+
+    logger.info(f"Found {len(gamma_markets)} live markets")
+    if not gamma_markets:
+        return []
+
+    token_ids = []
+    for market in gamma_markets:
+        token_id = yes_token_id(market)
+        if token_id:
+            token_ids.append(token_id)
+
+    logger.info(f"Fetching order books for {len(token_ids)} tokens (live)")
+    chunk_size = int(settings.books_batch)
+    books: Dict[str, OrderbookL1] = {}
+    for i in range(0, len(token_ids), chunk_size):
+        chunk = token_ids[i:i + chunk_size]
+        chunk_books = await get_books_batch(chunk)
+        books.update(chunk_books)
+
+    normalized_markets: List[MarketNormalized] = []
+    for market in gamma_markets:
+        token_id = yes_token_id(market)
+        l1 = books.get(token_id) if token_id else OrderbookL1()
+        mid = mid_from_l1(l1)
+        spread = spread_from_l1(l1)
+        depth = min(l1.bid_sz_usdc, l1.ask_sz_usdc)
+        liq_score = liquidity_score(spread, depth)
+        normalized_markets.append(
+            MarketNormalized(
+                id=market.id,
+                title=market.title,
+                description=market.description,
+                rules=market.rules,
+                deadline_utc=market.deadline_utc,
+                price_yes=mid,
+                spread=spread,
+                top_depth_usdc=depth,
+                liquidity_score=liq_score,
+            )
+        )
+    logger.info(f"Normalized {len(normalized_markets)} live markets with liquidity metrics")
     return normalized_markets
