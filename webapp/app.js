@@ -456,7 +456,7 @@ async function onUpcoming(category = null) {
         const markets = res?.markets || [];
         window.lastUpcomingMarkets = markets; // Store for analysis
         renderUpcoming(markets);
-        showToast(`Found ${res?.count ?? 0} markets (fetched ${new Date(res?.now_utc || Date.now()).toLocaleString()})`, 'success');
+        showToast(`Found ${res?.count ?? 0} markets (limit: ${res?.limit ?? 'unknown'}, fetched ${new Date(res?.now_utc || Date.now()).toLocaleString()})`, 'success');
     } catch (err) {
         showToast(`Failed to load upcoming: ${err.message}`, 'error');
         const el = document.getElementById('upcomingList');
@@ -519,21 +519,24 @@ async function onAnalyzeMarket(marketId, marketData = null) {
         const analyses = response?.analyses || [];
         
         if (analyses.length > 0) {
-            // Persist analysis results to curated store
+            // Persist analysis results to curated store with astro fields
             const items = analyses.map(a => ({
                 curation_id: generateCurationId(),
                 market_id: a.market_id,
                 title: a.title,
                 deadline_utc: a.deadline_utc,
-                price_mid: a?.prior?.p_market ?? null,
-                tags: payload.markets[0].tags || [],
-                decision: a?.decision?.side || 'SKIP',
-                confidence: a?.confidence ?? null,
-                p_model: a?.posterior?.p_model ?? a?.prior?.p_market ?? null,
+                p_market: a?.prior?.p_market ?? null,
+                p_model: a?.posterior?.p_model ?? null,
                 edge_yes: a?.edges?.yes ?? null,
                 edge_no: a?.edges?.no ?? null,
-                astro_included: a?.flags?.includes('astro_included') || false,
-                astro_eligible: a?.flags?.includes('astro_eligible') || false,
+                edge_best: a?.edges?.best ?? null,
+                astro_eligible: !!a?.astro?.eligible,
+                astro_included: !!a?.astro?.included,
+                S_astro: a?.astro?.S_astro ?? null,
+                LLR_ast: a?.astro?.LLR_ast ?? null,
+                decision: a?.decision?.side || 'SKIP',
+                confidence: a?.confidence ?? null,
+                tags: payload.markets[0].tags || [],
                 reasons: a?.reasons || [],
                 evidence: a?.evidence_cards || [],
                 red_flags: [],
@@ -600,7 +603,10 @@ function renderUpcoming(list) {
         el.innerHTML = '<div class="no-data">No upcoming markets for this quarter</div>';
         return;
     }
-    el.innerHTML = list.map(m => {
+    
+    // Add counter to verify no caps
+    const counterHTML = `<div class="text-sm text-gray-500" style="margin-bottom: 16px;">Showing ${list.length} market(s)</div>`;
+    el.innerHTML = counterHTML + list.map(m => {
         const mid = m.price_mid ?? m.price_yes_mid ?? m.price_yes ?? 0;
         const liq = m.liquidity_num ?? m.liquidity_score ?? 0;
         const tags = m.tags || m.category_tags || [];
@@ -692,14 +698,18 @@ function renderCurated() {
         return;
     }
     
-    // Map to SummaryRow format
+    // Map to SummaryRow format with astro fields
     const summary = analyzedMarkets.map(r => ({
         curation_id: r.curation_id,
         market_id: r.market_id,
         title: r.title,
         deadline_utc: r.deadline_utc,
         decision: r.decision,
-        confidence: r.confidence ?? null
+        confidence: r.confidence ?? null,
+        S_astro: r.S_astro ?? null,
+        LLR_ast: r.LLR_ast ?? null,
+        p_model: r.p_model ?? null,
+        edge_best: r.edge_best ?? (r.edge_yes != null && r.edge_no != null ? Math.max(Math.abs(r.edge_yes), Math.abs(r.edge_no)) : null)
     }));
     
     el.innerHTML = `
@@ -725,6 +735,23 @@ function fmtConf(x) {
     return `${Math.round(x * 100)}%`;
 }
 
+function fmtNum(x) {
+    if (x === null || x === undefined || Number.isNaN(x)) return '—';
+    return Number(x).toFixed(3);
+}
+
+function fmtPct(x) {
+    if (x === null || x === undefined || Number.isNaN(x)) return '—';
+    return `${Math.round(x * 100)}%`;
+}
+
+function renderDecisionBadge(decision) {
+    if (!decision) return '—';
+    const className = decision === 'YES' ? 'bg-emerald-100' : 
+                     decision === 'NO' ? 'bg-rose-100' : 'bg-amber-100';
+    return `<span class="text-xs rounded px-2 py-0.5 ${className}">${decision}</span>`;
+}
+
 function renderAnalysisSummaryTable(rows, showActions = true) {
     if (!rows || rows.length === 0) {
         return `
@@ -736,10 +763,14 @@ function renderAnalysisSummaryTable(rows, showActions = true) {
                             <th class="py-2 px-3">Resolution (UTC)</th>
                             <th class="py-2 px-3">Decision</th>
                             <th class="py-2 px-3">Confidence</th>
+                            <th class="py-2 px-3">Astro S</th>
+                            <th class="py-2 px-3">LLRₐ</th>
+                            <th class="py-2 px-3">p(model)</th>
+                            <th class="py-2 px-3">Edge*</th>
                         </tr>
                     </thead>
                     <tbody>
-                        <tr><td class="py-6 px-3 text-gray-500" colspan="4">No analyzed markets yet.</td></tr>
+                        <tr><td class="py-6 px-3 text-gray-500" colspan="8">No analyzed markets yet.</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -758,6 +789,10 @@ function renderAnalysisSummaryTable(rows, showActions = true) {
                         <th class="py-2 px-3">Resolution (UTC)</th>
                         <th class="py-2 px-3">Decision</th>
                         <th class="py-2 px-3">Confidence</th>
+                        <th class="py-2 px-3">Astro S</th>
+                        <th class="py-2 px-3">LLRₐ</th>
+                        <th class="py-2 px-3">p(model)</th>
+                        <th class="py-2 px-3">Edge*</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -765,17 +800,12 @@ function renderAnalysisSummaryTable(rows, showActions = true) {
                         <tr class="border-t">
                             <td class="py-2 px-3">${r.title || 'Untitled'}</td>
                             <td class="py-2 px-3">${fmtUTC(r.deadline_utc)}</td>
-                            <td class="py-2 px-3">
-                                ${r.decision ? `
-                                    <span class="text-xs rounded px-2 py-0.5 ${
-                                        r.decision === 'YES' ? 'bg-emerald-100' : 
-                                        r.decision === 'NO' ? 'bg-rose-100' : 'bg-amber-100'
-                                    }">
-                                        ${r.decision}
-                                    </span>
-                                ` : '—'}
-                            </td>
+                            <td class="py-2 px-3">${renderDecisionBadge(r.decision)}</td>
                             <td class="py-2 px-3">${fmtConf(r.confidence)}</td>
+                            <td class="py-2 px-3">${fmtNum(r.S_astro)}</td>
+                            <td class="py-2 px-3">${fmtNum(r.LLR_ast)}</td>
+                            <td class="py-2 px-3">${fmtPct(r.p_model)}</td>
+                            <td class="py-2 px-3">${fmtNum(r.edge_best)}</td>
                         </tr>
                     `).join('')}
                 </tbody>
@@ -801,14 +831,18 @@ function updateRecentAnalysis() {
         return;
     }
     
-    // Map to SummaryRow format
+    // Map to SummaryRow format with astro fields
     const recentSummary = analyzed.map(r => ({
         curation_id: r.curation_id,
         market_id: r.market_id,
         title: r.title,
         deadline_utc: r.deadline_utc,
         decision: r.decision,
-        confidence: r.confidence ?? null
+        confidence: r.confidence ?? null,
+        S_astro: r.S_astro ?? null,
+        LLR_ast: r.LLR_ast ?? null,
+        p_model: r.p_model ?? null,
+        edge_best: r.edge_best ?? (r.edge_yes != null && r.edge_no != null ? Math.max(Math.abs(r.edge_yes), Math.abs(r.edge_no)) : null)
     }));
     
     container.classList.remove('hidden');

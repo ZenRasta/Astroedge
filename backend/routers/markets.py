@@ -213,7 +213,7 @@ async def api_upcoming(
             except Exception as e:
                 logger.warning("markets_cache_upsert_failed: %s", e)
 
-        return {"now_utc": now.isoformat(), "count": len(out), "markets": out}
+        return {"now_utc": now.isoformat(), "count": len(out), "limit": limit, "markets": out}
         
     except Exception as e:
         logger.error(f"Failed /api/markets/upcoming: {e}")
@@ -323,6 +323,10 @@ async def analyze_now(body: Dict[str, Any]) -> Dict[str, Any]:
             
             size_fraction = min(size_cap, max(0.0, edge_net * 2))
             
+            # Calculate LLR_ast and edge_best
+            llr_ast = s_astro * 2.0 if s_astro > 0 else None  # Simple LLR approximation
+            edge_best = max(abs(edge_net), 0) if edge_net is not None else None
+            
             analyses.append({
                 "market_id": market_id,
                 "title": title,
@@ -339,7 +343,14 @@ async def analyze_now(body: Dict[str, Any]) -> Dict[str, Any]:
                 "confidence": confidence,
                 "edges": {
                     "yes": edge_net if decision_side == "YES" else -edge_net,
-                    "no": edge_net if decision_side == "NO" else -edge_net
+                    "no": edge_net if decision_side == "NO" else -edge_net,
+                    "best": edge_best
+                },
+                "astro": {
+                    "eligible": s_astro > 0,
+                    "included": s_astro > 0,
+                    "S_astro": s_astro,
+                    "LLR_ast": llr_ast
                 },
                 "flags": [
                     "astro_eligible" if s_astro > 0 else None,
@@ -351,7 +362,6 @@ async def analyze_now(body: Dict[str, Any]) -> Dict[str, Any]:
                 ],
                 "evidence_cards": [],
                 "tags": tags,
-                "s_astro": s_astro,
                 "size_fraction": size_fraction
             })
         
